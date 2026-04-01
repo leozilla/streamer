@@ -2,8 +2,8 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum ConfigStoreError {
-    #[error("invalid supported streams (expected to be in range 10-100)")]
-    OutOfBonds,
+    #[error("invalid supported streams (expected to be in range 1-1024)")]
+    InvalidArg,
     #[error("unknown config store error")]
     Unknown,
 }

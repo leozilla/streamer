@@ -8,7 +8,7 @@ use tonic::{Request, Response, Status};
 
 use data_plane::DataPlane;
 use api::streamer_server::Streamer;
-use api::{GetConfigRequest, GetConfigReply, SetConfigRequest, SetConfigReply};
+use api::*;
 use crate::config_store::{ConfigStore, ConfigStoreError};
 
 pub struct StreamerImpl<C: ConfigStore> {
@@ -47,10 +47,46 @@ impl<C: ConfigStore + 'static> Streamer for StreamerImpl<C> {
                 };
                 Ok(Response::new(reply))
             },
-            Err(ConfigStoreError::OutOfBonds) => Err(Status::invalid_argument("invalid supported streams (expected to be in range 10-100)")),
-            Err(ConfigStoreError::Unknown) => Err(Status::internal("unknown error")),
+            Err(error) => match error {
+                ConfigStoreError::InvalidArg => Err(Status::invalid_argument(error.to_string())),
+                ConfigStoreError::Unknown => Err(Status::internal(error.to_string())),
+            }
         };
 
         result
+    }
+
+    async fn list_provisioned_streams(
+        &self,
+        _: Request<ListProvisionedStreamsRequest>,
+    ) -> Result<Response<ListProvisionedStreamsReply>, Status> {
+        let reply = ListProvisionedStreamsReply {
+            streams: self.data_plane.list_provisioned_streams()
+                .into_iter()
+                .map(|stream|
+                    ShortStreamDescription {
+                        id: "todo".to_string(),
+                        source_port: stream.source,
+                        sink_ports: stream.sinks,
+                    }
+                )
+                .collect(),
+        };
+        Ok(Response::new(reply))
+    }
+
+    async fn provision_stream(
+        &self,
+        _: Request<ProvisionStreamRequest>,
+    ) -> Result<Response<ProvisionStreamReply>, Status> {
+        let p: Vec<u32> = Vec::new();
+        let reply = ProvisionStreamReply {
+            stream: Some(FullStreamDescription {
+                        id: "todo".to_string(),
+                        source_port: 1,
+                        sink_ports: p,
+                    })
+        };
+        Ok(Response::new(reply))
     }
 }

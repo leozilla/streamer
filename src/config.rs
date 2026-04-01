@@ -81,8 +81,8 @@ impl ConfigStore for InMemoryConfigStore {
     }
 
     fn set_new_config(&self, total_supported_streams: u32) -> Result<(), ConfigStoreError> {
-        if (total_supported_streams < 10) || (total_supported_streams > 100) {
-            return Err(ConfigStoreError::OutOfBonds);
+        if (total_supported_streams < 1) || (total_supported_streams > 1024) {
+            return Err(ConfigStoreError::InvalidArg);
         }
         
         let mut config = self.config.write().map_err(|_| ConfigStoreError::Unknown)?;        

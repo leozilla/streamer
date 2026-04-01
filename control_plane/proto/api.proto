@@ -6,6 +6,10 @@ service Streamer {
     rpc GetConfig (GetConfigRequest) returns (GetConfigReply) {}
     rpc SetConfig (SetConfigRequest) returns (SetConfigReply) {}
 
+    rpc ListProvisionedStreams (ListProvisionedStreamsRequest) returns (ListProvisionedStreamsReply) {}
+    
+    rpc ProvisionStream (ProvisionStreamRequest) returns (ProvisionStreamReply) {}
+
 }
 
 message GetConfigRequest {
@@ -20,6 +24,35 @@ message SetConfigRequest {
 }
 
 message SetConfigReply {
+}
+
+message ListProvisionedStreamsRequest {
+}
+
+message ListProvisionedStreamsReply {
+    repeated ShortStreamDescription streams = 1;
+}
+
+message ProvisionStreamRequest {
+    uint32 source_port = 1;
+    repeated uint32 sink_ports = 2;
+    string description = 3;
+}
+
+message ProvisionStreamReply {
+    FullStreamDescription stream = 1;
+}
+
+message ShortStreamDescription {
+    string id = 1;
+    uint32 source_port = 2;
+    repeated uint32 sink_ports = 3;
+}
+
+message FullStreamDescription {
+    string id = 1;
+    uint32 source_port = 2;
+    repeated uint32 sink_ports = 3;
 }
 
 /*
