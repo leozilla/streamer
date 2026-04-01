@@ -1,6 +1,6 @@
 use serde::{Deserialize, Deserializer};
 use std::{fs, fmt};
-use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use control_plane::config_store::{ConfigStore, ConfigStoreError};
 use std::sync::RwLock;
@@ -33,7 +33,7 @@ where
     D: Deserializer<'de>,
 {
     let port: u16 = Deserialize::deserialize(deserializer)?;
-    Ok(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), port))
+    Ok(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port))
 }
 
 const CONFIG_FILE_NAME: &str = "config.yml";

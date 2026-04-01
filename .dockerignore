@@ -1,0 +1,17 @@
+# Git
+.git
+.gitignore
+
+# Rust / Cargo
+target/
+**/*.rs.bk
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml

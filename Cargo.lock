@@ -801,6 +801,7 @@ dependencies = [
  "serde",
  "serde_yaml",
  "tokio",
+ "tonic",
 ]
 
 [[package]]

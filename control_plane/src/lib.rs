@@ -1,5 +1,6 @@
 mod grpc;
 pub mod config_store;
+pub use grpc::api;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
