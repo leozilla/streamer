@@ -1,5 +1,6 @@
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use std::{fs, fmt};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -20,7 +21,16 @@ pub struct PortRangeConfig {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerConfig {
-    pub port: u32,
+    #[serde(rename = "port", deserialize_with = "deserialize_port_to_socket_addr")]
+    pub bind_address: SocketAddr,
+}
+
+fn deserialize_port_to_socket_addr<'de, D>(deserializer: D) -> Result<SocketAddr, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let port: u16 = Deserialize::deserialize(deserializer)?;
+    Ok(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), port))
 }
 
 const CONFIG_FILE_NAME: &str = "config.yml";
