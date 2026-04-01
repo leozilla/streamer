@@ -5,18 +5,23 @@ pub mod api {
 }
 
 use crate::Config;
+use std::sync::Arc;
+
+use data_plane::DataPlane;
 
 use api::streamer_server::Streamer;
 use api::{GetConfigRequest, GetConfigReply};
 
 pub struct StreamerImpl {
     config: Config,
+    data_plane: Arc<DataPlane>,
 }
 
 impl StreamerImpl {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config, data_plane: Arc<DataPlane>) -> Self {
         Self { 
-            config
+            config,
+            data_plane,
         }
     }
 }
