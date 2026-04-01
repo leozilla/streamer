@@ -9,6 +9,7 @@ tonic-reflection = "0.13" # Matches your tonic version
 prost = "0.13"
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+thiserror = "2"
 data_plane = { path = "../data_plane" }
 
 [build-dependencies]

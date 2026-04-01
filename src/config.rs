@@ -2,7 +2,7 @@ use serde::{Deserialize, Deserializer};
 use std::{fs, fmt};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 
-use control_plane::config_store::ConfigStore;
+use control_plane::config_store::{ConfigStore, ConfigStoreError};
 use std::sync::RwLock;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -80,8 +80,14 @@ impl ConfigStore for InMemoryConfigStore {
         self.config.read().unwrap().total_supported_streams
     }
 
-    fn set_new_config(&self, total_supported_streams: u32) {
-        let mut config = self.config.write().unwrap();
+    fn set_new_config(&self, total_supported_streams: u32) -> Result<(), ConfigStoreError> {
+        if (total_supported_streams < 10) || (total_supported_streams > 100) {
+            return Err(ConfigStoreError::OutOfBonds);
+        }
+        
+        let mut config = self.config.write().map_err(|_| ConfigStoreError::Unknown)?;        
         config.total_supported_streams = total_supported_streams;
+
+        Ok(())
     }
 }

@@ -9,7 +9,7 @@ use tonic::{Request, Response, Status};
 use data_plane::DataPlane;
 use api::streamer_server::Streamer;
 use api::{GetConfigRequest, GetConfigReply, SetConfigRequest, SetConfigReply};
-use crate::config_store::ConfigStore;
+use crate::config_store::{ConfigStore, ConfigStoreError};
 
 pub struct StreamerImpl<C: ConfigStore> {
     config_store: Arc<C>,
@@ -41,10 +41,16 @@ impl<C: ConfigStore + 'static> Streamer for StreamerImpl<C> {
         &self,
         request: Request<SetConfigRequest>,
     ) -> Result<Response<SetConfigReply>, Status> {
-        self.config_store.set_new_config(request.into_inner().total_supported_streams);
-
-        let reply = SetConfigReply {
+        let result = match self.config_store.set_new_config(request.into_inner().total_supported_streams) {  
+            Ok(_) => {
+                let reply = SetConfigReply {
+                };
+                Ok(Response::new(reply))
+            },
+            Err(ConfigStoreError::OutOfBonds) => Err(Status::invalid_argument("invalid supported streams (expected to be in range 10-100)")),
+            Err(ConfigStoreError::Unknown) => Err(Status::internal("unknown error")),
         };
-        Ok(Response::new(reply))
+
+        result
     }
 }
