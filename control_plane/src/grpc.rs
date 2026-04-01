@@ -77,14 +77,16 @@ impl<C: ConfigStore + 'static> Streamer for StreamerImpl<C> {
 
     async fn provision_stream(
         &self,
-        _: Request<ProvisionStreamRequest>,
+        request: Request<ProvisionStreamRequest>,
     ) -> Result<Response<ProvisionStreamReply>, Status> {
-        let p: Vec<u32> = Vec::new();
+        let request  = request.into_inner();
+        let stream = self.data_plane.provision_stream(request.source_port, request.sink_ports);
+
         let reply = ProvisionStreamReply {
             stream: Some(FullStreamDescription {
                         id: "todo".to_string(),
-                        source_port: 1,
-                        sink_ports: p,
+                        source_port: stream.source,
+                        sink_ports: stream.sinks,
                     })
         };
         Ok(Response::new(reply))

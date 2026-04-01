@@ -28,6 +28,10 @@ impl DataPlane {
         self.stream_manager.list_provisioned_streams()
     }
 
+    pub fn provision_stream(&self, source: Port, sinks: Vec<Port>) -> Stream {
+        self.stream_manager.provision_stream(source, sinks)
+    }
+
 }
 
 #[derive(Clone)]
