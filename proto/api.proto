@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package api;
+
+service Streamer {
+    rpc GetConfig (GetConfigRequest) returns (GetConfigReply) {}
+
+
+}
+
+message GetConfigRequest {
+}
+
+message GetConfigReply {
+    uint32 totalSupportedStreams = 1;
+}
+
+/*
+GetConfig
+SetConfig
+
+ListStreamsRequest(limit)
+ListStreamsResponse(List[ShortStreamDescription])
+
+GetStreamInfoByIdRequest(id)
+GetStreamInfoBySourcePortRequest(sourcePort)
+GetStreamInfoResponse(List[FullStreamDescription])
+
+ShortStreamDescription(id, sourcePort, List[sinkPort])
+FullStreamDescription(id, createdAt, description, metaData, creator, sourcePort, List[sinkPort], codec, buffer_size)
+
+ProvisionStreamRequest(sourcePort, List[sinkPort], description, metaData)
+ProvisionStreamResponse(FullStreamDescription, InvalidPort|Duplicate|LoopDetected|StreamLimitReached)
+
+UpdateStreamRequest(id, description, metaData, List[sinkPort])
+UpdateStreamResponse(FullStreamDescription, old: List[sinkPort])
+...
+SetStreamDescriptionRequest NotAuthorized if not creator
+SetStreamMetaDataRequest NotAuthorized
+AddStreamMetaDataRequest NotAuthorized
+SetStreamsinkPortsRequest(FullStreamDescription, old: List[sinkPort])
+AddStreamsinkPortRequest(FullStreamDescription, old: List[sinkPort])
+
+DeprovisionStreamByIdRequest(id)
+DeprovisionStreamBySourcePortRequest(sourcePort)
+DeprovisionStreamByIdResponse(Option[ShortStreamDescription])
+DeprovisionStreamBySourcePortRequest(List[ShortStreamDescription])
+
+
+// used when only interessted if a new stream was provisioned or the streams was updated
+SubscribeStreamProvisioningRequest
+StreamProvisioned
+StreamUpdated
+StreamDeprovisioned
+
+// used to display the full graph and be able to visualize when data flows th
+SubscribeGraphRequest
+GraphUpdated
+DataFlowUpdate
+*/

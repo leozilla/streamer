@@ -1,0 +1,9 @@
+totalSupportedStreams: 100
+sourcePortRange:
+  from: 3000
+  to: 4000
+sinkPortRange:
+  from: 3000
+  to: 4000
+server:
+  port: 50051
