@@ -1,44 +1,17 @@
 use tonic::transport::Server;
-use serde::Deserialize;
-use std::{fs, fmt};
 
 use control_plane::api::streamer_server::StreamerServer;
 use control_plane::StreamerImpl;
 
 mod control_plane;
+mod config; 
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Config {
-    total_supported_streams: u32,
-    source_port_range: PortRangeConfig,
-    sink_port_range: PortRangeConfig,
-    server: ServerConfig,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PortRangeConfig {
-    from: u32,
-    to: u32,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ServerConfig {
-    port: u32,
-}
+use config::Config;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let filename = "config.yml";
-    let contents = fs::read_to_string(filename)
-        .expect(&format!("Config file not found: {}", filename));
-
-    let config: Config = serde_yaml::from_str(&contents)
-        .expect(&format!("Failed to parse YAML config file: {}", filename));
-
-    print_config(&config);
+    let config: Config = Config::parse()?;
+    config.print();
 
     let addr = format!("[::1]:{}", config.server.port)
         .parse()
@@ -61,16 +34,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     Ok(())
-}
-
-impl fmt::Display for PortRangeConfig {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}-{}", self.from, self.to)
-    }
-}
-
-fn print_config(config: &Config) {
-    println!("Total supported streams: {}", config.total_supported_streams);
-    println!("Source port range: {}", config.source_port_range);
-    println!("Sink port range: {}", config.sink_port_range);
 }
