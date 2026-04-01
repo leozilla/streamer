@@ -4,13 +4,22 @@ package api;
 
 service Streamer {
     rpc GetConfig (GetConfigRequest) returns (GetConfigReply) {}
+    rpc SetConfig (SetConfigRequest) returns (SetConfigReply) {}
+
 }
 
 message GetConfigRequest {
 }
 
 message GetConfigReply {
-    uint32 totalSupportedStreams = 1;
+    uint32 total_supported_streams = 1;
+}
+
+message SetConfigRequest {
+    uint32 total_supported_streams = 1;
+}
+
+message SetConfigReply {
 }
 
 /*

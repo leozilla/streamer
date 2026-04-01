@@ -1,39 +1,49 @@
-use tonic::{Request, Response, Status};
-
 pub mod api {
     tonic::include_proto!("api");
 }
 
-use crate::Config;
 use std::sync::Arc;
 
+use tonic::{Request, Response, Status};
+
 use data_plane::DataPlane;
-
 use api::streamer_server::Streamer;
-use api::{GetConfigRequest, GetConfigReply};
+use api::{GetConfigRequest, GetConfigReply, SetConfigRequest, SetConfigReply};
+use crate::config_store::ConfigStore;
 
-pub struct StreamerImpl {
-    config: Config,
+pub struct StreamerImpl<C: ConfigStore> {
+    config_store: Arc<C>,
     data_plane: Arc<DataPlane>,
 }
 
-impl StreamerImpl {
-    pub fn new(config: Config, data_plane: Arc<DataPlane>) -> Self {
-        Self { 
-            config,
+impl<C: ConfigStore> StreamerImpl<C> {
+    pub fn new(config_store: Arc<C>, data_plane: Arc<DataPlane>) -> Self {
+        Self {
+            config_store,
             data_plane,
         }
     }
 }
 
 #[tonic::async_trait]
-impl Streamer for StreamerImpl {
+impl<C: ConfigStore + 'static> Streamer for StreamerImpl<C> {
     async fn get_config(
         &self,
         _: Request<GetConfigRequest>,
     ) -> Result<Response<GetConfigReply>, Status> {
         let reply = GetConfigReply {
-            total_supported_streams: self.config.total_supported_streams
+            total_supported_streams: self.config_store.total_supported_streams()
+        };
+        Ok(Response::new(reply))
+    }
+
+    async fn set_config(
+        &self,
+        request: Request<SetConfigRequest>,
+    ) -> Result<Response<SetConfigReply>, Status> {
+        self.config_store.set_new_config(request.into_inner().total_supported_streams);
+
+        let reply = SetConfigReply {
         };
         Ok(Response::new(reply))
     }

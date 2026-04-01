@@ -13,3 +13,5 @@ edition = "2024"
 control_plane = { path = "./control_plane" }
 data_plane = { path = "./data_plane" }
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"

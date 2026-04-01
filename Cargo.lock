@@ -108,7 +108,6 @@ dependencies = [
  "data_plane",
  "prost",
  "serde",
- "serde_yaml",
  "tokio",
  "tonic",
  "tonic-build",
@@ -734,6 +733,8 @@ version = "0.1.0"
 dependencies = [
  "control_plane",
  "data_plane",
+ "serde",
+ "serde_yaml",
  "tokio",
 ]
 
