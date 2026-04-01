@@ -4,8 +4,6 @@ package api;
 
 service Streamer {
     rpc GetConfig (GetConfigRequest) returns (GetConfigReply) {}
-
-
 }
 
 message GetConfigRequest {

@@ -1,32 +1,17 @@
-use tonic::transport::Server;
+use control_plane;
+// use data_plane;
 
-use control_plane::api::streamer_server::StreamerServer;
-use control_plane::StreamerImpl;
-
-mod control_plane;
-mod config; 
-
-use config::Config;
+use control_plane::{config::Config, ControlPlane};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("Starting streamer service");
+ 
     let config: Config = Config::parse()?;
     config.print();
-
-    let addr = config.server.bind_address;
-    let streamer = StreamerImpl::new(config);
-
-    let reflection_service = tonic_reflection::server::Builder::configure()
-        .register_encoded_file_descriptor_set(include_bytes!(concat!(env!("OUT_DIR"), "/api_descriptor.bin")))
-        .build_v1()?;
-
-    println!("Starting gRPC server, listening on {}", addr);
-
-    Server::builder()
-        .add_service(reflection_service)
-        .add_service(StreamerServer::new(streamer))
-        .serve(addr)
-        .await?;
-
+ 
+    let control_plane = ControlPlane::new(&config);
+    control_plane.start().await?;
+ 
     Ok(())
 }
