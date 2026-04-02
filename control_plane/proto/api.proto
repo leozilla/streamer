@@ -35,7 +35,7 @@ message ListProvisionedStreamsReply {
 
 message ProvisionStreamRequest {
     uint32 source_port = 1;
-    repeated uint32 sink_ports = 2;
+    uint32 sink_port = 2;
     string description = 3;
 }
 
@@ -46,13 +46,13 @@ message ProvisionStreamReply {
 message ShortStreamDescription {
     string id = 1;
     uint32 source_port = 2;
-    repeated uint32 sink_ports = 3;
+    uint32 sink_port = 3;
 }
 
 message FullStreamDescription {
     string id = 1;
     uint32 source_port = 2;
-    repeated uint32 sink_ports = 3;
+    uint32 sink_port = 3;
 }
 
 /*

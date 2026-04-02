@@ -140,6 +140,7 @@ name = "data_plane"
 version = "0.1.0"
 dependencies = [
  "dashmap",
+ "thiserror",
  "tokio",
 ]
 

@@ -67,7 +67,7 @@ impl<C: ConfigStore + 'static> Streamer for StreamerImpl<C> {
                     ShortStreamDescription {
                         id: "todo".to_string(),
                         source_port: stream.source,
-                        sink_ports: stream.sinks,
+                        sink_port: stream.sink,
                     }
                 )
                 .collect(),
@@ -80,15 +80,22 @@ impl<C: ConfigStore + 'static> Streamer for StreamerImpl<C> {
         request: Request<ProvisionStreamRequest>,
     ) -> Result<Response<ProvisionStreamReply>, Status> {
         let request  = request.into_inner();
-        let stream = self.data_plane.provision_stream(request.source_port, request.sink_ports);
-
-        let reply = ProvisionStreamReply {
-            stream: Some(FullStreamDescription {
-                        id: "todo".to_string(),
-                        source_port: stream.source,
-                        sink_ports: stream.sinks,
-                    })
+        let result = match self.data_plane.provision_stream(request.source_port, request.sink_ports) {
+             Ok(_) => {
+                let reply = ProvisionStreamReply {
+                    stream: Some(FullStreamDescription {
+                                id: "todo".to_string(),
+                                source_port: stream.source,
+                                sink_port: stream.sink,
+                            })
+                };
+                Ok(Response::new(reply))
+            },
+            Err(error) => match error {
+                io::Error => Err(Status::internal(error.to_string())),
+            }
         };
-        Ok(Response::new(reply))
+
+        result
     }
 }
