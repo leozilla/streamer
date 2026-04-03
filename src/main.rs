@@ -10,7 +10,7 @@ use data_plane::DataPlane;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting streamer service");
  
-    let config: Config = Config::parse()?;
+    let config: Config = Config::parse().expect("Config parsed");
     config.print();
     
     let config_store = Arc::new(InMemoryConfigStore::new(&config));

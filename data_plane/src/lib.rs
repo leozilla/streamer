@@ -1,8 +1,8 @@
-use dashmap::DashMap;
 use std::io;
 use std::sync::Arc;
-use std::net::{TcpStream, TcpListener};
 
+use dashmap::DashMap;
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}};
 use thiserror::Error;
 
 type Port = u32; // todo should be u16
@@ -17,7 +17,7 @@ pub struct StreamRegistry {
 }
 
 pub struct ConnectionManager {
-    connections: Arc<DashMap<Port, Connection>>,
+    connections: Arc<DashMap<Port, Arc<tokio::sync::Mutex<Connection>>>>,
 }
 
 impl DataPlane {
@@ -38,8 +38,8 @@ impl DataPlane {
         self.stream_registry.list_provisioned_streams()
     }
 
-    pub fn provision_stream(&self, source: Port, sink: Port) -> io::Result<ProvisionedStream> {
-        let _ = self.connection_manager.connect_stream(source, sink)?;
+    pub async fn provision_stream(&self, source: Port, sink: Port) -> io::Result<ProvisionedStream> {
+        let _ = self.connection_manager.connect_stream(source, sink).await?;
 
         let stream = self.stream_registry.add_provisioned_stream(source, sink);
         Ok(stream)
@@ -55,12 +55,12 @@ pub struct ProvisionedStream {
 
 struct Connection {
     port: Port,
-    mut stream: TcpStream,
+    stream: TcpStream,
 }
 
 struct Stream {
-    source: Connection,
-    sink: Connection,
+    source: Arc<tokio::sync::Mutex<Connection>>,
+    sink: Arc<tokio::sync::Mutex<Connection>>,
 }
 
 impl StreamRegistry {
@@ -98,25 +98,63 @@ impl ConnectionManager {
         }
     }
 
-    fn bind(&self, port: Port) -> io::Result<Connection> {
-        let listener = TcpListener::bind(format!("0.0.0.0:{}", port))?;
-        let (mut stream, _) = listener.accept()?;
+    async fn bind(&self, port: Port) -> io::Result<Arc<tokio::sync::Mutex<Connection>>> {
+        let listener  = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
         
-        let con = Connection { 
+        let (stream, _) = listener.accept().await?;
+
+        let con = Arc::new(tokio::sync::Mutex::new(Connection { 
             port,
             stream,
-        };
+        }));
+
+        self.connections.insert(port, Arc::clone(&con));
 
         Ok(con)
     }
 
-    fn connect_stream(&self, source: Port, sink: Port) -> io::Result<Stream> {
-        let src_con = self.bind(source)?;
-        let dst_con = self.bind(sink)?;
+    async fn connect_stream(&self, source: Port, sink: Port) -> io::Result<Stream> {
+        let (src_socket, sink_socket) = tokio::try_join!(self.bind(source), self.bind(sink))?;
+
+        let (tx_chan, mut rx_chan) = tokio::sync::mpsc::unbounded_channel();
+
+        let src_socket_clone = Arc::clone(&src_socket);
+        // spawn a Tokio task for each connection (I/O bound)
+        tokio::spawn(async move {
+            let mut buffer = [0; 1024];
+            
+            while let Ok(n) = src_socket_clone.lock().await.stream.read(&mut buffer).await {
+                if n == 0 { break; }
+                
+                let data = buffer[..n].to_vec();
+                let tx_inner = tx_chan.clone();
+
+                // HAND OFF TO RAYON (CPU bound)
+                // We use a oneshot-style handoff or spawn into the global pool
+                rayon::spawn(move || {
+                    // let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+                    // encoder.write_all(&data_chunk).unwrap();
+                    // let compressed = encoder.finish().unwrap();
+                    
+                    // Send to further processing
+                    let _ = tx_inner.send(data);
+                });
+            }
+        });
+
+        let sink_socket_clone = Arc::clone(&sink_socket);
+        // spawn a Tokio task to send data to the sink stream
+        tokio::spawn(async move {
+            while let Some(data) = rx_chan.recv().await {
+                let mut sink_socket_guard = sink_socket_clone.lock().await;
+                let _ = sink_socket_guard.stream.write_all(&data).await;
+                let _ = sink_socket_guard.stream.flush().await;
+            }
+        });
 
         let stream = Stream {
-            source: src_con,
-            sink: dst_con,
+            source: src_socket,
+            sink: sink_socket,
         };
 
         Ok(stream)

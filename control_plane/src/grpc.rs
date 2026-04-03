@@ -3,6 +3,7 @@ pub mod api {
 }
 
 use std::sync::Arc;
+use std::io;
 
 use tonic::{Request, Response, Status};
 
@@ -80,8 +81,8 @@ impl<C: ConfigStore + 'static> Streamer for StreamerImpl<C> {
         request: Request<ProvisionStreamRequest>,
     ) -> Result<Response<ProvisionStreamReply>, Status> {
         let request  = request.into_inner();
-        let result = match self.data_plane.provision_stream(request.source_port, request.sink_ports) {
-             Ok(_) => {
+        let result = match self.data_plane.provision_stream(request.source_port, request.sink_port).await {
+             Ok(stream) => {
                 let reply = ProvisionStreamReply {
                     stream: Some(FullStreamDescription {
                                 id: "todo".to_string(),
@@ -91,9 +92,7 @@ impl<C: ConfigStore + 'static> Streamer for StreamerImpl<C> {
                 };
                 Ok(Response::new(reply))
             },
-            Err(error) => match error {
-                io::Error => Err(Status::internal(error.to_string())),
-            }
+            Err(error) => Err(Status::internal(error.to_string())),
         };
 
         result
