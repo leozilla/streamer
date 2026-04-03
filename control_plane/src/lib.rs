@@ -5,11 +5,11 @@ pub use grpc::api;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use tracing::info;
 use tonic::transport::Server;
 
 use grpc::api::streamer_server::StreamerServer;
 use grpc::StreamerImpl;
-
 use data_plane::DataPlane;
 use config_store::ConfigStore;
 
@@ -33,7 +33,7 @@ impl<C: ConfigStore + 'static> ControlPlane<C> {
             .register_encoded_file_descriptor_set(include_bytes!(concat!(env!("OUT_DIR"), "/api_descriptor.bin")))
             .build_v1()?;
  
-        println!("Starting control plane. gRPC server listening on {}", addr);
+        info!("Starting control plane. gRPC server listening on {}", addr);
  
         Server::builder()
             .add_service(reflection_service)

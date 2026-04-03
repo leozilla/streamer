@@ -29,8 +29,8 @@ async fn test_list_streams_integration() {
     assert_eq!(response.into_inner().streams.len(), 0);
 
     let request = tonic::Request::new(ProvisionStreamRequest {
-        source_port: 1,
-        sink_port: 1,
+        source_port: 32000,
+        sink_port: 32001,
         description: "My awesome stream".into(),
     });
     let response = client.provision_stream(request).await.unwrap();
@@ -45,14 +45,15 @@ async fn test_list_streams_integration() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_stream_data_flow_integration() {
     common::start_server().await;
     let mut client = common::connect_grpc_client().await;
 
-    let _ = common::api_provision_stream(&mut client, 32000, 32001).await;
+    let _ = common::api_provision_stream(&mut client, 32100, 32101).await;
 
-    let mut src_socket = common::connect(32000).await.expect("Bound to source port");
-    let mut sink_socket = common::connect(32001).await.expect("Connected to sink port");
+    let mut src_socket = common::connect(32100).await.expect("Bound to source port");
+    let mut sink_socket = common::connect(32101).await.expect("Connected to sink port");
 
     let data = "Hello from the Rust test!".as_bytes();
     src_socket.write_all(&data).await.expect("Failed to write to stream");

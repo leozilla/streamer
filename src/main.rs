@@ -1,17 +1,19 @@
 use std::sync::Arc;
 
-mod config;
+use tracing::info;
 
+mod config;
 use config::{Config, InMemoryConfigStore};
 use control_plane::ControlPlane;
 use data_plane::DataPlane;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Starting streamer service");
+    tracing_subscriber::fmt::init();
+    info!("Starting streamer service");
  
     let config: Config = Config::parse().expect("Config parsed");
-    config.print();
+    config.log();
     
     let config_store = Arc::new(InMemoryConfigStore::new(&config));
     let data_plane = Arc::new(DataPlane::new());

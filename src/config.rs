@@ -1,9 +1,11 @@
-use serde::{Deserialize, Deserializer};
+use std::sync::RwLock;
 use std::{fs, fmt};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+use serde::{Deserialize, Deserializer};
+use tracing::info;
+
 use control_plane::config_store::{ConfigStore, ConfigStoreError};
-use std::sync::RwLock;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,11 +51,11 @@ impl Config {
         Ok(config)
     }
 
-    pub fn print(&self) {
-        println!("Total supported streams: {}", self.total_supported_streams);
-        println!("Source port range: {}", self.source_port_range);
-        println!("Sink port range: {}", self.sink_port_range);
-        println!("Server address: {}", self.server.bind_address);
+    pub fn log(&self) {
+        info!("Total supported streams: {}", self.total_supported_streams);
+        info!("Source port range: {}", self.source_port_range);
+        info!("Sink port range: {}", self.sink_port_range);
+        info!("Server address: {}", self.server.bind_address);
     }
 }
 

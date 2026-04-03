@@ -1,6 +1,7 @@
 use std::io;
 
 use tokio::net::{TcpListener, TcpSocket, TcpStream};
+use tokio::time::{timeout, Duration};
 
 use control_plane::api::streamer_client::StreamerClient;
 use control_plane::api::*;
@@ -38,7 +39,7 @@ pub async fn connect(port: u32) -> io::Result<TcpStream> {
     let addr = format!("0.0.0.0:{}", port).parse().unwrap();
     
     let socket = TcpSocket::new_v4()?;
-    let stream  = socket.connect(addr).await?;
+    let stream  = timeout(Duration::from_secs(5), socket.connect(addr)).await??;
     
     Ok(stream)
 }

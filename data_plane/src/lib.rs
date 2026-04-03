@@ -1,9 +1,10 @@
 use std::io;
 use std::sync::Arc;
 
+use tracing::{info, debug, span, instrument, Level};
+
 use dashmap::DashMap;
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}};
-use thiserror::Error;
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpStream};
 
 type Port = u32; // todo should be u16
 
@@ -13,7 +14,7 @@ pub struct DataPlane {
 }
 
 pub struct StreamRegistry {
-    streams: Arc<DashMap<Port, ProvisionedStream>>,
+    streams: Arc<DashMap<Port, StreamDescription>>,
 }
 
 pub struct ConnectionManager {
@@ -29,26 +30,30 @@ impl DataPlane {
     }
     
     pub fn start(&self) -> Result<(), Box<dyn std::error::Error>> { 
-        println!("Starting data plane.");
+        info!("Starting data plane.");
   
         Ok(())
     }
 
-    pub fn list_provisioned_streams(&self) -> Vec<ProvisionedStream> {
+    pub fn list_provisioned_streams(&self) -> Vec<StreamDescription> {
         self.stream_registry.list_provisioned_streams()
     }
 
-    pub async fn provision_stream(&self, source: Port, sink: Port) -> io::Result<ProvisionedStream> {
+    pub async fn provision_stream(&self, source: Port, sink: Port) -> io::Result<StreamDescription> {
+        info!("Provisioning stream {} -> {}", source, sink);
+        
         let _ = self.connection_manager.connect_stream(source, sink).await?;
 
         let stream = self.stream_registry.add_provisioned_stream(source, sink);
+        info!("New stream with Id {} provisioned and running {} -> {}", stream.id, source, sink);
         Ok(stream)
     }
 
 }
 
 #[derive(Clone)]
-pub struct ProvisionedStream {
+pub struct StreamDescription {
+    id: String,
     pub source: Port,
     pub sink: Port,
 }
@@ -70,8 +75,9 @@ impl StreamRegistry {
         }
     }
 
-    pub fn add_provisioned_stream(&self, source: Port, sink: Port) -> ProvisionedStream {
-        let stream = ProvisionedStream {
+    pub fn add_provisioned_stream(&self, source: Port, sink: Port) -> StreamDescription {
+        let stream = StreamDescription {
+            id: "todo".to_string(),
             source,
             sink,
         };
@@ -81,8 +87,8 @@ impl StreamRegistry {
         stream
     }
 
-    pub fn list_provisioned_streams(&self) -> Vec<ProvisionedStream> {
-        let streams: Vec<ProvisionedStream> = Arc::clone(&self.streams)
+    pub fn list_provisioned_streams(&self) -> Vec<StreamDescription> {
+        let streams: Vec<StreamDescription> = Arc::clone(&self.streams)
             .iter()
             .map(|entry| entry.value().clone())
             .collect();
@@ -99,6 +105,7 @@ impl ConnectionManager {
     }
 
     async fn bind(&self, port: Port) -> io::Result<Arc<tokio::sync::Mutex<Connection>>> {
+        debug!("Binding to port {}", port);
         let listener  = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
         
         let (stream, _) = listener.accept().await?;
@@ -117,6 +124,9 @@ impl ConnectionManager {
         let (src_socket, sink_socket) = tokio::try_join!(self.bind(source), self.bind(sink))?;
 
         let (tx_chan, mut rx_chan) = tokio::sync::mpsc::unbounded_channel();
+
+        let connect_span = span!(Level::INFO, "connect_stream");
+        let _enter = connect_span.enter();
 
         let src_socket_clone = Arc::clone(&src_socket);
         // spawn a Tokio task for each connection (I/O bound)
