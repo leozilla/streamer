@@ -1,3 +1,5 @@
+mod processor;
+
 use std::io;
 use std::sync::Arc;
 
@@ -18,7 +20,7 @@ pub struct StreamRegistry {
 }
 
 pub struct ConnectionManager {
-    connections: Arc<DashMap<Port, Arc<tokio::sync::Mutex<Connection>>>>,
+    listeners: DashMap<Port, Arc<TcpListener>>,
 }
 
 impl DataPlane {
@@ -36,16 +38,21 @@ impl DataPlane {
     }
 
     pub fn list_provisioned_streams(&self) -> Vec<StreamDescription> {
-        self.stream_registry.list_provisioned_streams()
+        self.stream_registry.list_streams()
     }
 
     pub async fn provision_stream(&self, source: Port, sink: Port) -> io::Result<StreamDescription> {
         info!("Provisioning stream {} -> {}", source, sink);
         
+        if let Some(stream) = self.stream_registry.find_stream(source, sink) {
+            info!("Stream with id {} already provisioned {} -> {}", stream.id, source, sink);
+            return Ok(stream);
+        }
+
         let _ = self.connection_manager.connect_stream(source, sink).await?;
 
-        let stream = self.stream_registry.add_provisioned_stream(source, sink);
-        info!("New stream with Id {} provisioned and running {} -> {}", stream.id, source, sink);
+        let stream = self.stream_registry.add_stream(source, sink);
+        info!("New stream with Id {} provisioned {} -> {}", stream.id, source, sink);
         Ok(stream)
     }
 
@@ -58,16 +65,6 @@ pub struct StreamDescription {
     pub sink: Port,
 }
 
-struct Connection {
-    port: Port,
-    stream: TcpStream,
-}
-
-struct Stream {
-    source: Arc<tokio::sync::Mutex<Connection>>,
-    sink: Arc<tokio::sync::Mutex<Connection>>,
-}
-
 impl StreamRegistry {
     pub fn new() -> Self {
         Self { 
@@ -75,7 +72,7 @@ impl StreamRegistry {
         }
     }
 
-    pub fn add_provisioned_stream(&self, source: Port, sink: Port) -> StreamDescription {
+    pub fn add_stream(&self, source: Port, sink: Port) -> StreamDescription {
         let stream = StreamDescription {
             id: "todo".to_string(),
             source,
@@ -87,7 +84,13 @@ impl StreamRegistry {
         stream
     }
 
-    pub fn list_provisioned_streams(&self) -> Vec<StreamDescription> {
+    pub fn find_stream(&self, source: Port, sink: Port) -> Option<StreamDescription> {
+        self.streams.get(&source)
+            .map(|r| r.value().clone())
+            .filter(|s| s.sink == sink)
+    } 
+
+    pub fn list_streams(&self) -> Vec<StreamDescription> {
         let streams: Vec<StreamDescription> = Arc::clone(&self.streams)
             .iter()
             .map(|entry| entry.value().clone())
@@ -100,7 +103,7 @@ impl StreamRegistry {
 impl ConnectionManager {
     pub fn new() -> Self {
         Self { 
-            connections: Arc::new(DashMap::new())
+            listeners: DashMap::new()
         }
     }
 
@@ -112,9 +115,12 @@ impl ConnectionManager {
     }
 
     async fn connect_stream(&self, source: Port, sink: Port) -> io::Result<()> {
-        let src_listener = self.bind(source).await?;
-        let sink_listener = self.bind(sink).await?;
-        
+        let src_listener = Arc::new(self.bind(source).await?);
+        self.listeners.insert(source, Arc::clone(&src_listener));
+
+        let sink_listener = Arc::new(self.bind(sink).await?);
+        self.listeners.insert(sink, Arc::clone(&sink_listener));
+
         tokio::spawn(async move {
             info!("Awaiting connections on source port {} and sink port {}", source, sink);
             
@@ -133,25 +139,11 @@ impl ConnectionManager {
 
                         trace!("Data received on source {}", source);
                         
-                        let data = buffer[..n].to_vec();
-                        let tx_inner = tx_chan.clone();
-
-                        // HAND OFF TO RAYON (CPU bound)
-                        // We use a oneshot-style handoff or spawn into the global pool
-                        rayon::spawn(move || {
-                            // let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-                            // encoder.write_all(&data_chunk).unwrap();
-                            // let compressed = encoder.finish().unwrap();
-                            
-                            // Send to further processing
-                            let _ = tx_inner.send(data);
-
-                            trace!("Data processed, sending to sink {}", sink);
-                        });
+                        processor::process_stream_data(sink, &tx_chan, buffer, n);
                     }
                 });
 
-                // spawn a Tokio task to send data to the sink stream
+                // spawn a Tokio task to send data to the sink of the stream (also I/O bound)
                 tokio::spawn(async move {
                     while let Some(data) = rx_chan.recv().await {
                         trace!("Processed data received, writting data out to sink {}", sink);
@@ -164,8 +156,6 @@ impl ConnectionManager {
                 });
             }
         });
-        
-        // self.connections.insert(port, Arc::clone(&con));
 
         Ok(())
     }
