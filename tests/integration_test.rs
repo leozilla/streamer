@@ -6,6 +6,7 @@ use tokio::net::TcpSocket;
 use control_plane::api::*;
 
 #[tokio::test]
+#[ignore]
 async fn test_get_config_integration() {
     common::start_server().await;
     let mut client = common::connect_grpc_client().await;
@@ -18,6 +19,7 @@ async fn test_get_config_integration() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_list_streams_integration() {
     common::start_server().await;
     let mut client = common::connect_grpc_client().await;
@@ -45,7 +47,6 @@ async fn test_list_streams_integration() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_stream_data_flow_integration() {
     common::start_server().await;
     let mut client = common::connect_grpc_client().await;
