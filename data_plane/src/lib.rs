@@ -1,7 +1,7 @@
 use std::io;
 use std::sync::Arc;
 
-use tracing::{info, debug, span, instrument, Level};
+use tracing::{info, debug, trace};
 
 use dashmap::DashMap;
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpStream, TcpListener}};
@@ -105,7 +105,7 @@ impl ConnectionManager {
     }
 
     async fn bind(&self, port: Port) -> io::Result<TcpListener> {
-        debug!("Binding to port {}", port);
+        info!("Binding to port {}", port);
 
         let listener: tokio::net::TcpListener  = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
         Ok(listener)
@@ -116,47 +116,53 @@ impl ConnectionManager {
         let sink_listener = self.bind(sink).await?;
         
         tokio::spawn(async move {
-            debug!("Awaiting connections on source port {} and sink port {}", source, sink);
+            info!("Awaiting connections on source port {} and sink port {}", source, sink);
             
-            let ((mut src_socket, _), (mut sink_socket, _)) = tokio::try_join!(src_listener.accept(), sink_listener.accept()).unwrap();
-            debug!("Connection on source port {} and sink port {} established", source, sink);
+            loop {
+                let ((mut src_socket, _), (mut sink_socket, _)) = tokio::try_join!(src_listener.accept(), sink_listener.accept()).unwrap();
+                info!("Connection on source port {} and sink port {} established", source, sink);
 
-            let (tx_chan, mut rx_chan) = tokio::sync::mpsc::unbounded_channel();
+                let (tx_chan, mut rx_chan) = tokio::sync::mpsc::unbounded_channel();
 
-            // spawn a Tokio task for each connection (I/O bound)
-            tokio::spawn(async move {
-                let mut buffer = [0; 1024];
-                
-                while let Ok(n) = src_socket.read(&mut buffer).await {
-                    if n == 0 { break; }
-
-                    debug!("Data received on source port {}", source);
+                // spawn a Tokio task for each connection (I/O bound)
+                tokio::spawn(async move {
+                    let mut buffer = [0; 1024];
                     
-                    let data = buffer[..n].to_vec();
-                    let tx_inner = tx_chan.clone();
+                    while let Ok(n) = src_socket.read(&mut buffer).await {
+                        if n == 0 { break; }
 
-                    // HAND OFF TO RAYON (CPU bound)
-                    // We use a oneshot-style handoff or spawn into the global pool
-                    rayon::spawn(move || {
-                        // let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-                        // encoder.write_all(&data_chunk).unwrap();
-                        // let compressed = encoder.finish().unwrap();
+                        trace!("Data received on source {}", source);
                         
-                        // Send to further processing
-                        let _ = tx_inner.send(data);
-                    });
-                }
-            });
+                        let data = buffer[..n].to_vec();
+                        let tx_inner = tx_chan.clone();
 
-            // spawn a Tokio task to send data to the sink stream
-            tokio::spawn(async move {
-                while let Some(data) = rx_chan.recv().await {
-                    debug!("Writing data to sink port {}", sink);
+                        // HAND OFF TO RAYON (CPU bound)
+                        // We use a oneshot-style handoff or spawn into the global pool
+                        rayon::spawn(move || {
+                            // let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+                            // encoder.write_all(&data_chunk).unwrap();
+                            // let compressed = encoder.finish().unwrap();
+                            
+                            // Send to further processing
+                            let _ = tx_inner.send(data);
 
-                    let _ = sink_socket.write_all(&data).await;
-                    let _ = sink_socket.flush().await;
-                }
-            });
+                            trace!("Data processed, sending to sink {}", sink);
+                        });
+                    }
+                });
+
+                // spawn a Tokio task to send data to the sink stream
+                tokio::spawn(async move {
+                    while let Some(data) = rx_chan.recv().await {
+                        trace!("Processed data received, writting data out to sink {}", sink);
+
+                        let _ = sink_socket.write_all(&data).await;
+                        let _ = sink_socket.flush().await;
+
+                        trace!("Data flushed on sink {}", sink);
+                    }
+                });
+            }
         });
         
         // self.connections.insert(port, Arc::clone(&con));

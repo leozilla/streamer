@@ -51,17 +51,19 @@ async fn test_stream_data_flow_integration() {
     common::start_server().await;
     let mut client = common::connect_grpc_client().await;
 
-    let _ = common::api_provision_stream(&mut client, 32100, 32101).await;
+    let src_port = 32100;
+    let sink_port = 32101;
+    let _ = common::api_provision_stream(&mut client, src_port, sink_port).await;
 
-    let mut src_socket = common::connect(32100).await.expect("Bound to source port");
-    let mut sink_socket = common::connect(32101).await.expect("Connected to sink port");
+    let mut src_socket = common::connect(src_port).await.expect("Bound to source port");
+    let mut sink_socket = common::connect(sink_port).await.expect("Connected to sink port");
 
-    let data = "Hello from the Rust test!".as_bytes();
+    let data = "Hello".as_bytes();
     src_socket.write_all(&data).await.expect("Failed to write to stream");
     src_socket.flush().await.expect("Failed to flush stream");
 
-    let mut buf = Vec::new();
-    sink_socket.read_to_end(&mut buf).await.expect("Failed to read from stream");
+    let mut buf = [0u8; 5];
+    sink_socket.read_exact(&mut buf).await.expect("Failed to read from stream");
 
     assert_eq!(buf, data);
 }
