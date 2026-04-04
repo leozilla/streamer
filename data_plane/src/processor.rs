@@ -1,20 +1,55 @@
-use tracing::{trace};
+use std::sync::Arc;
 
-use crate::Port;
+use tokio::sync::{mpsc, Mutex};
+use tracing::{debug, trace};
 
-pub fn process_stream_data(sink: Port, tx_chan: &tokio::sync::mpsc::UnboundedSender<Vec<u8>>, buffer: [u8; 1024], n: usize) {
-    let data = buffer[..n].to_vec();
-    let tx_inner = tx_chan.clone();
+use crate::ProcessingJob;
+use crate::SinkWriteJob;
 
-    // HAND OFF TO RAYON (CPU bound)
-    // We use a oneshot-style handoff or spawn into the global pool
-    rayon::spawn(move || {
-        // let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-        // encoder.write_all(&data_chunk).unwrap();
-        // let compressed = encoder.finish().unwrap();
-    
-        let _ = tx_inner.send(data);
+pub struct Processor {
+    proc_rx: Arc<Mutex<mpsc::Receiver<ProcessingJob>>>,
+    sink_tx: mpsc::Sender<SinkWriteJob>,
+}
 
-        trace!("Data processed, sending to sink {}", sink);
-    });
+impl Processor {
+    pub fn new(proc_rx: mpsc::Receiver<ProcessingJob>, sink_tx: mpsc::Sender<SinkWriteJob>) -> Self {
+        Self {
+            proc_rx: Arc::new(Mutex::new(proc_rx)),
+            sink_tx
+        }
+    }
+
+    pub fn start(&self) {
+        let proc_rx = Arc::clone(&self.proc_rx);
+        let sink_tx = self.sink_tx.clone(); // todo clone?
+
+        tokio::spawn(async move {
+            let mut proc_rx = proc_rx.lock().await;
+            
+            while let Some(job) = proc_rx.recv().await {
+                trace!("ProcessingJob received {:?}", job);
+
+                let sink_tx = sink_tx.clone(); // todo clone?
+
+                // HAND OFF TO RAYON (CPU bound)
+                // We use a oneshot-style handoff or spawn into the global pool
+                rayon::spawn(move || {
+                    // let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+                    // encoder.write_all(&data_chunk).unwrap();
+                    // let compressed = encoder.finish().unwrap();
+                
+                    let processed = job.data;
+                    let data_len = processed.len();
+
+                    let job = SinkWriteJob {
+                        data: processed,
+                        n: data_len,
+                        source: job.source
+                    };
+                    let _ = sink_tx.blocking_send(job);
+                    // trace!("SinkWriteJob submitted {}", job);
+                });
+            }
+        });
+    }
 }

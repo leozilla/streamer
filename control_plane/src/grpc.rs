@@ -1,16 +1,16 @@
-pub mod api {
-    tonic::include_proto!("api");
-}
-
 use std::sync::Arc;
-use std::io;
 
 use tonic::{Request, Response, Status};
 
 use data_plane::DataPlane;
+use crate::config_store::{ConfigStore, ConfigStoreError};
+
+pub mod api {
+    tonic::include_proto!("api");
+}
+
 use api::streamer_server::Streamer;
 use api::*;
-use crate::config_store::{ConfigStore, ConfigStoreError};
 
 pub struct StreamerImpl<C: ConfigStore> {
     config_store: Arc<C>,
@@ -67,8 +67,8 @@ impl<C: ConfigStore + 'static> Streamer for StreamerImpl<C> {
                 .map(|stream|
                     ShortStreamDescription {
                         id: "todo".to_string(),
-                        source_port: stream.source,
-                        sink_port: stream.sink,
+                        source_port: u32::from(stream.source),
+                        sink_port: u32::from(stream.sink),
                     }
                 )
                 .collect(),
@@ -81,13 +81,18 @@ impl<C: ConfigStore + 'static> Streamer for StreamerImpl<C> {
         request: Request<ProvisionStreamRequest>,
     ) -> Result<Response<ProvisionStreamReply>, Status> {
         let request  = request.into_inner();
-        let result = match self.data_plane.provision_stream(request.source_port, request.sink_port).await {
+
+        if u16::try_from(request.source_port).is_err() || u16::try_from(request.sink_port).is_err() {
+            return Err(Status::invalid_argument("Invalid port number"));
+        }
+
+        let result = match self.data_plane.provision_stream(request.source_port as u16, request.sink_port as u16).await {
              Ok(stream) => {
                 let reply = ProvisionStreamReply {
                     stream: Some(FullStreamDescription {
                                 id: "todo".to_string(),
-                                source_port: stream.source,
-                                sink_port: stream.sink,
+                                source_port: u32::from(stream.source),
+                                sink_port: u32::from(stream.sink),
                             })
                 };
                 Ok(Response::new(reply))
