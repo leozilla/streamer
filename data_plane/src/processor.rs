@@ -46,11 +46,10 @@ impl Processor {
 
                     let job = SinkWriteJob {
                         data: processed,
-                        n: data_len,
                         source: job.source
                     };
-                    let _ = sink_tx.blocking_send(job);
-                    trace!("Submitted SinkWriteJob: source={}, bytes={}", source, data_len);
+                    trace!("Submitting SinkWriteJob: source={}, bytes={}", source, data_len);
+                    let _ = sink_tx.blocking_send(job);                    
                 });
             }
         });

@@ -3,10 +3,11 @@ mod processor;
 use std::io;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use tracing::{info, debug, trace, error};
 use dashmap::DashMap;
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}, sync::{OnceCell, mpsc, Mutex}};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::UdpSocket, sync::{OnceCell, mpsc, Mutex}};
 
 use processor::Processor;
 
@@ -20,20 +21,20 @@ pub struct DataPlane {
     data_tx: DataTx,
 }
 
-pub struct StreamRegistry {
+struct StreamRegistry {
+    id_counter: AtomicU32,
     streams: Arc<DashMap<Port, StreamDescription>>,
     connected_ports: DashMap<Port, Vec<Port>>,
 }
 
-pub struct ConnectionManager {
+struct ConnectionManager {
     port_listeners: Arc<Mutex<HashMap<Port, Arc<OnceCell<io::Result<()>>>>>>,
-    processing_job_subscribers: Vec<mpsc::Sender<ProcessingJob>>,
-    connections: Arc<DashMap<Port, Arc<Mutex<TcpStream>>>>,
-    rx_con_tx: Arc<mpsc::Sender<HandleConnectionJob>>,
+    sockets: Arc<DashMap<Port, Arc<Mutex<UdpSocket>>>>,
+    rx_con_tx: Arc<mpsc::Sender<HandleUdpSocketJob>>,
 }
 
 struct DataRx {
-    con_rx: Arc<Mutex<mpsc::Receiver<HandleConnectionJob>>>,
+    con_rx: Arc<Mutex<mpsc::Receiver<HandleUdpSocketJob>>>,
     proc_tx: Arc<mpsc::Sender<ProcessingJob>>,
 }
 
@@ -47,20 +48,19 @@ struct DataTx {
 pub struct ProcessingJob {
     data: Vec<u8>,
     n: usize,
-    source: Port
+    source: Port,
 }
 
 #[derive(Clone, Debug)]
 pub struct SinkWriteJob {
     data: Vec<u8>,
-    n: usize,
-    source: Port
+    source: Port,
 }
 
 #[derive(Clone, Debug)]
-struct HandleConnectionJob {
+struct HandleUdpSocketJob {
     source: Port,
-    socket: Arc<Mutex<TcpStream>>,
+    socket: Arc<Mutex<UdpSocket>>,
 }
 
 impl DataPlane {
@@ -123,16 +123,17 @@ pub struct StreamDescription {
 }
 
 impl StreamRegistry {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self { 
+            id_counter: AtomicU32::new(1),
             streams: Arc::new(DashMap::new()),
             connected_ports: DashMap::new(),
         }
     }
 
-    pub fn add_stream(&self, source: Port, sink: Port) -> StreamDescription {
+    fn add_stream(&self, source: Port, sink: Port) -> StreamDescription {
         let stream = StreamDescription {
-            id: "todo".to_string(),
+            id: self.id_counter.fetch_add(1, Ordering::SeqCst).to_string(),
             source,
             sink,
         };
@@ -151,7 +152,7 @@ impl StreamRegistry {
         stream
     }
 
-    pub fn list_streams(&self) -> Vec<StreamDescription> {
+    fn list_streams(&self) -> Vec<StreamDescription> {
         let streams: Vec<StreamDescription> = Arc::clone(&self.streams)
             .iter()
             .map(|entry| entry.value().clone())
@@ -172,37 +173,21 @@ impl StreamRegistry {
 }
 
 impl ConnectionManager {
-    pub fn new(rx_con_tx: mpsc::Sender<HandleConnectionJob>) -> Self {
-        
+    fn new(rx_con_tx: mpsc::Sender<HandleUdpSocketJob>) -> Self {    
         Self { 
             port_listeners: Arc::new(Mutex::new(HashMap::new())),
-            processing_job_subscribers: Vec::new(), // todo
             rx_con_tx: Arc::new(rx_con_tx),
-            connections: Arc::new(DashMap::new()),
+            sockets: Arc::new(DashMap::new()),
         }
     }
 
-    fn subscribe(&mut self, sub: mpsc::Sender<ProcessingJob>) { // todo
-        self.processing_job_subscribers.push(sub);
-    }
-
-    async fn notify_job(&mut self, job: ProcessingJob) { // todo
-        for tx in self.processing_job_subscribers.iter() {
-            tx.send(job.clone()).await.is_ok();
-        }    
-    }
-
-    pub fn add_connection(&self, port: Port, socket: Arc<Mutex<TcpStream>>) {
-        self.connections.insert(port, socket);
-    }
-
-    fn get_connection(&self, port: &Port) -> Option<Arc<Mutex<TcpStream>>> {
-        self.connections.get(port).map(|r| Arc::clone(r.value()))
+    fn get_connection(&self, port: &Port) -> Option<Arc<Mutex<UdpSocket>>> {
+        self.sockets.get(port).map(|r| Arc::clone(r.value()))
     }
 
     async fn bind<F, Fut>(&self, port: Port, handler: F) -> io::Result<()> 
     where
-        F: Fn(Port, TcpListener) -> Fut + Send + Sync + Clone + 'static,
+        F: Fn(Port, UdpSocket) -> Fut + Send + Sync + Clone + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
         let cell = {
@@ -212,12 +197,12 @@ impl ConnectionManager {
         };
 
         cell.get_or_init(|| async {
-            info!("Binding to port {}", port);
+            debug!("Binding to port {}", port);
 
-            let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
+            let socket = tokio::net::UdpSocket::bind(format!("0.0.0.0:{}", port)).await?;
 
             tokio::spawn(async move {
-                handler(port, listener).await;
+                handler(port, socket).await;
             });
 
             Ok(())
@@ -228,63 +213,43 @@ impl ConnectionManager {
 
     async fn connect_source(&self, source: Port) -> io::Result<()> {
         let rx_con_tx = Arc::clone(&self.rx_con_tx);
-        let connections = Arc::clone(&self.connections);
+        let sockets = Arc::clone(&self.sockets);
 
-        self.bind(source, move |port, listener| {
+        self.bind(source, move |port, src_socket| {
             let rx_con_tx = Arc::clone(&rx_con_tx);
-            let connections = Arc::clone(&connections);
+            let sockets = Arc::clone(&sockets);
 
             async move {
-                info!("Awaiting connections on source {}", port);
-                
-                loop {
-                    match listener.accept().await {
-                        Ok((src_socket, addr)) => {
-                            info!("New connection on source port {} from {:?} accepted", port, addr);
-                            
-                            let socket_arc = Arc::new(Mutex::new(src_socket));
-                            connections.insert(port, Arc::clone(&socket_arc));
+                let socket_arc = Arc::new(Mutex::new(src_socket));
+                sockets.insert(port, Arc::clone(&socket_arc));
 
-                            let job = HandleConnectionJob {
-                                source: port,
-                                socket: socket_arc,
-                            };
-                            trace!("Submitting {:?}", job);
-                            let _ = rx_con_tx.send(job).await;
-                        }
-                        Err(e) => error!("Failed to accept connection on port {}: {}", port, e),
-                    }                   
-                }
+                let job = HandleUdpSocketJob {
+                    source: port,
+                    socket: socket_arc,
+                };
+                trace!("Submitting {:?}", job);
+                let _ = rx_con_tx.send(job).await;
             }
         }).await
     }
 
     async fn connect_sink(&self, sink: Port) -> io::Result<()> {
-        let connections = Arc::clone(&self.connections);
+        let sockets = Arc::clone(&self.sockets);
 
-        self.bind(sink, move |port, listener| {
-            let connections = Arc::clone(&connections);
+        self.bind(0, move |port, sink_socket| {
+            let sockets = Arc::clone(&sockets);
 
             async move {
-                info!("Awaiting connections on sink port {}", port);
-                
-                loop {
-                    match listener.accept().await {
-                        Ok((sink_socket, addr)) => {
-                            info!("New connection on sink port {} from {:?} accepted", port, addr);
+                info!("Socket on sink port {} opened", port);
                             
-                            connections.insert(port, Arc::new(Mutex::new(sink_socket)));
-                        }
-                        Err(e) => error!("Failed to accept connection on port {}: {}", port, e),
-                    }               
-                }
+                sockets.insert(sink, Arc::new(Mutex::new(sink_socket)));
             }
         }).await
     }
 }
 
 impl DataRx {
-    pub fn new(con_rx: mpsc::Receiver<HandleConnectionJob>, proc_tx: mpsc::Sender<ProcessingJob>) -> Self {
+    pub fn new(con_rx: mpsc::Receiver<HandleUdpSocketJob>, proc_tx: mpsc::Sender<ProcessingJob>) -> Self {
         Self { 
             con_rx: Arc::new(Mutex::new(con_rx)),            
             proc_tx: Arc::new(proc_tx),
@@ -308,10 +273,10 @@ impl DataRx {
                     let mut buffer = [0; 1024];
 
                     let mut socket = job.socket.lock().await;
-                    while let Ok(n) = socket.read(&mut buffer).await {
+                    while let Ok((n, addr)) = socket.recv_from(&mut buffer).await {
                         if n == 0 { break; }
 
-                        trace!("Data received on source {} from {:?}", job.source, socket.peer_addr());
+                        trace!("Data received on source {} from {:?}", job.source, addr);
                         
                         let data = buffer[..n].to_vec();
                         let job = ProcessingJob {
@@ -347,7 +312,7 @@ impl DataTx {
             let mut sink_rx = sink_rx.lock().await;
 
             while let Some(job) = sink_rx.recv().await {
-                trace!("SinkWriteJob received {:?}", job);
+                trace!("Received SinkWriteJob, source={}, bytes={}", job.source, job.data.len());
 
                 let sink_ports = stream_registry.get_connected_sinks(job.source);
                 for sink_port in sink_ports {
@@ -356,10 +321,9 @@ impl DataTx {
                     
                     tokio::spawn(async move {
                         let mut sink_socket = sink_socket.lock().await;
-                        let _ = sink_socket.write_all(&data).await;
-                        let _ = sink_socket.flush().await;
+                        let _ = sink_socket.send_to(&data, format!("0.0.0.0:{}", sink_port)).await;
 
-                        trace!("Data flushed on sink {} to {:?}", sink_port, sink_socket.peer_addr());
+                        trace!("Data flushed on sink {}", sink_port);
                     });
                 }
             }

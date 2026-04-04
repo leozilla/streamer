@@ -1,6 +1,6 @@
 use std::io;
 
-use tokio::net::{TcpListener, TcpSocket, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream, UdpSocket};
 use tokio::time::{timeout, Duration};
 
 use control_plane::api::streamer_client::StreamerClient;
@@ -28,18 +28,18 @@ pub async fn api_provision_stream(client: &mut StreamerClient<tonic::transport::
     assert_eq!(response.into_inner().stream.is_some(), true);
 }
 
-pub async fn bind_and_accept(port: u32) -> io::Result<TcpStream> {
-    let listener  = TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
-    
-    let (mut stream, _) = listener.accept().await?;
-    Ok(stream)
-}
-
-pub async fn connect(port: u32) -> io::Result<TcpStream> {
+pub async fn connect_tcp(port: u32) -> io::Result<TcpStream> {
     let addr = format!("0.0.0.0:{}", port).parse().unwrap();
     
     let socket = TcpSocket::new_v4()?;
     let stream  = timeout(Duration::from_secs(5), socket.connect(addr)).await??;
+    
+    Ok(stream)
+}
+
+pub async fn bind_udp(port: u32) -> io::Result<UdpSocket> {
+    let addr = format!("0.0.0.0:{}", port);    
+    let stream  = timeout(Duration::from_secs(5), UdpSocket::bind(addr)).await??;
     
     Ok(stream)
 }
