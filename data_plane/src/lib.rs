@@ -57,7 +57,7 @@ pub struct SinkWriteJob {
     source: Port
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct HandleConnectionJob {
     source: Port,
     socket: Arc<Mutex<TcpStream>>,
@@ -249,8 +249,8 @@ impl ConnectionManager {
                                 source: port,
                                 socket: socket_arc,
                             };
+                            trace!("Submitting {:?}", job);
                             let _ = rx_con_tx.send(job).await;
-                            // trace!("HandleConnectionJob submitted {:?}", job);
                         }
                         Err(e) => error!("Failed to accept connection on port {}: {}", port, e),
                     }                   
@@ -300,7 +300,7 @@ impl DataRx {
             let mut con_rx = con_rx.lock().await;
 
             while let Some(job) = con_rx.recv().await {
-                trace!("HandleConnectionJob received {:?}", job);
+                trace!("Received {:?}", job);
 
                 let source_tx = Arc::clone(&source_tx);
 
@@ -311,7 +311,7 @@ impl DataRx {
                     while let Ok(n) = socket.read(&mut buffer).await {
                         if n == 0 { break; }
 
-                        trace!("Data received on source {:?} from {:?}", socket.local_addr(), socket.peer_addr());
+                        trace!("Data received on source {} from {:?}", job.source, socket.peer_addr());
                         
                         let data = buffer[..n].to_vec();
                         let job = ProcessingJob {
@@ -319,8 +319,8 @@ impl DataRx {
                             n,
                             source: job.source
                         };
-                        source_tx.send(job).await.unwrap();
-                        // trace!("ProcessingJob submitted {:?}", job);
+                        trace!("Submitting ProcessingJob, source={}, bytes={}", job.source, n);
+                        source_tx.send(job).await.unwrap();                    
                     }
                 });
             }
@@ -359,7 +359,7 @@ impl DataTx {
                         let _ = sink_socket.write_all(&data).await;
                         let _ = sink_socket.flush().await;
 
-                        trace!("Data flushed on sink {:?} to {:?}", sink_socket.local_addr(), sink_socket.peer_addr());
+                        trace!("Data flushed on sink {} to {:?}", sink_port, sink_socket.peer_addr());
                     });
                 }
             }
