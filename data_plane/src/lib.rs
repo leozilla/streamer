@@ -7,7 +7,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use tracing::{info, debug, trace, error};
 use dashmap::DashMap;
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::UdpSocket, sync::{OnceCell, mpsc, Mutex}};
+use tokio::{net::UdpSocket, sync::{OnceCell, mpsc, Mutex}};
+
+use rtp::packet::Packet;
+use webrtc_util::marshal::Unmarshal;
 
 use processor::Processor;
 
@@ -23,12 +26,11 @@ pub struct DataPlane {
 
 struct StreamRegistry {
     id_counter: AtomicU32,
-    streams: Arc<DashMap<Port, StreamDescription>>,
-    connected_ports: DashMap<Port, Vec<Port>>,
+    streams: Arc<DashMap<Port, Vec<StreamDescription>>>,
 }
 
 struct ConnectionManager {
-    port_listeners: Arc<Mutex<HashMap<Port, Arc<OnceCell<io::Result<()>>>>>>,
+    port_listeners: Arc<Mutex<HashMap<Port, Arc<OnceCell<()>>>>>,
     sockets: Arc<DashMap<Port, Arc<Mutex<UdpSocket>>>>,
     rx_con_tx: Arc<mpsc::Sender<HandleUdpSocketJob>>,
 }
@@ -46,14 +48,15 @@ struct DataTx {
 
 #[derive(Clone, Debug)]
 pub struct ProcessingJob {
-    data: Vec<u8>,
+    data: bytes::Bytes,
+    sequence_number: u16,
     n: usize,
     source: Port,
 }
 
 #[derive(Clone, Debug)]
 pub struct SinkWriteJob {
-    data: Vec<u8>,
+    data: bytes::Bytes,
     source: Port,
 }
 
@@ -117,7 +120,7 @@ impl DataPlane {
 
 #[derive(Clone)]
 pub struct StreamDescription {
-    id: String,
+    pub id: String,
     pub source: Port,
     pub sink: Port,
 }
@@ -127,7 +130,6 @@ impl StreamRegistry {
         Self { 
             id_counter: AtomicU32::new(1),
             streams: Arc::new(DashMap::new()),
-            connected_ports: DashMap::new(),
         }
     }
 
@@ -138,16 +140,7 @@ impl StreamRegistry {
             sink,
         };
 
-        self.streams.insert(source, stream.clone());
-
-        if self.connected_ports.contains_key(&source) {
-            self.connected_ports.alter(&source, |_, mut v| {
-                v.push(sink);
-                v
-            });
-        } else {
-            self.connected_ports.insert(source, vec![sink]);
-        }
+        self.streams.entry(source).or_default().push(stream.clone());
 
         stream
     }
@@ -156,6 +149,7 @@ impl StreamRegistry {
         let streams: Vec<StreamDescription> = Arc::clone(&self.streams)
             .iter()
             .map(|entry| entry.value().clone())
+            .flatten()
             .collect();
 
         streams
@@ -163,12 +157,18 @@ impl StreamRegistry {
 
     fn find_stream(&self, source: Port, sink: Port) -> Option<StreamDescription> {
         self.streams.get(&source)
-            .map(|r| r.value().clone())
-            .filter(|s| s.sink == sink)
+            .and_then(|r| r.value().iter().find(|s| s.sink == sink).cloned())
     }
 
-    fn get_connected_sinks(&self, source: Port) -> Vec<Port> {
-        self.connected_ports.get(&source).unwrap().clone()
+    fn for_each_stream_by_source<F>(&self, source: Port, mut f: F)
+    where
+        F: FnMut(&StreamDescription),
+    {
+        if let Some(r) = self.streams.get(&source) {
+            for stream in r.value() {
+                f(stream);
+            }
+        }
     }
 }
 
@@ -196,7 +196,7 @@ impl ConnectionManager {
             Arc::clone(cell)
         };
 
-        cell.get_or_init(|| async {
+        cell.get_or_try_init(|| async move {
             debug!("Binding to port {}", port);
 
             let socket = tokio::net::UdpSocket::bind(format!("0.0.0.0:{}", port)).await?;
@@ -205,10 +205,10 @@ impl ConnectionManager {
                 handler(port, socket).await;
             });
 
-            Ok(())
-        }).await;
+            Ok::<(), io::Error>(())
+        }).await?;
 
-        Ok(()) // todo
+        Ok(())
     }
 
     async fn connect_source(&self, source: Port) -> io::Result<()> {
@@ -234,17 +234,12 @@ impl ConnectionManager {
     }
 
     async fn connect_sink(&self, sink: Port) -> io::Result<()> {
-        let sockets = Arc::clone(&self.sockets);
-
-        self.bind(0, move |port, sink_socket| {
-            let sockets = Arc::clone(&sockets);
-
-            async move {
-                info!("Socket on sink port {} opened", port);
-                            
-                sockets.insert(sink, Arc::new(Mutex::new(sink_socket)));
-            }
-        }).await
+        if !self.sockets.contains_key(&sink) {
+            let sink_socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
+            info!("Egress socket for sink port {} opened", sink);
+            self.sockets.insert(sink, Arc::new(Mutex::new(sink_socket)));
+        }
+        Ok(())
     }
 }
 
@@ -270,22 +265,38 @@ impl DataRx {
                 let source_tx = Arc::clone(&source_tx);
 
                 tokio::spawn(async move {
-                    let mut buffer = [0; 1024];
+                    let mut buf = bytes::BytesMut::with_capacity(1024);
 
-                    let mut socket = job.socket.lock().await;
-                    while let Ok((n, addr)) = socket.recv_from(&mut buffer).await {
-                        if n == 0 { break; }
-
-                        trace!("Data received on source {} from {:?}", job.source, addr);
-                        
-                        let data = buffer[..n].to_vec();
-                        let job = ProcessingJob {
-                            data,
-                            n,
-                            source: job.source
-                        };
-                        trace!("Submitting ProcessingJob, source={}, bytes={}", job.source, n);
-                        source_tx.send(job).await.unwrap();                    
+                    let socket = job.socket.lock().await;
+                    loop {
+                        buf.reserve(1024); // Ensure enough contiguous capacity for the next UDP packet
+                        match socket.recv_buf_from(&mut buf).await {
+                            Ok((n, addr)) if n > 0 => {
+                                trace!("Received data on source {} from {:?}", job.source, addr);
+                                
+                                let data = buf.split().freeze();
+                                let mut data_reader = data.clone();
+                                
+                                match Packet::unmarshal(&mut data_reader) {
+                                    Ok(rtp_packet) => {
+                                        let seq = rtp_packet.header.sequence_number;
+                                        trace!("Received RTP packet on source {}, seq={}", job.source, seq);
+                                        
+                                        let job = ProcessingJob {
+                                            data, // Forward the entire raw packet so sinks get a valid RTP stream
+                                            sequence_number: seq,
+                                            n,
+                                            source: job.source
+                                        };
+                                        source_tx.send(job).await.unwrap();
+                                    }
+                                    Err(err) => {
+                                        error!("Failed to parse RTP packet: {}", err);
+                                    }
+                                }
+                            }
+                            _ => break,
+                        }
                     }
                 });
             }
@@ -314,18 +325,19 @@ impl DataTx {
             while let Some(job) = sink_rx.recv().await {
                 trace!("Received SinkWriteJob, source={}, bytes={}", job.source, job.data.len());
 
-                let sink_ports = stream_registry.get_connected_sinks(job.source);
-                for sink_port in sink_ports {
+                stream_registry.for_each_stream_by_source(job.source, |stream| {
+                    let sink_port = stream.sink;
                     let sink_socket = connection_manager.get_connection(&sink_port).unwrap();
-                    let data = job.data.clone();
+                    let data = job.data.clone(); // `Bytes::clone` is an extremely cheap pointer copy
                     
                     tokio::spawn(async move {
-                        let mut sink_socket = sink_socket.lock().await;
-                        let _ = sink_socket.send_to(&data, format!("0.0.0.0:{}", sink_port)).await;
+                        let sink_socket = sink_socket.lock().await;
+                        let addr = format!("0.0.0.0:{}", sink_port);
+                        let _ = sink_socket.send_to(&data, addr).await;
 
                         trace!("Data flushed on sink {}", sink_port);
                     });
-                }
+                });
             }
         });
     }

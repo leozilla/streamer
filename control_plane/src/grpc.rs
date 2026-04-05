@@ -90,14 +90,19 @@ impl<C: ConfigStore + 'static> Streamer for StreamerImpl<C> {
              Ok(stream) => {
                 let reply = ProvisionStreamReply {
                     stream: Some(FullStreamDescription {
-                                id: "todo".to_string(),
+                                id: stream.id,
                                 source_port: u32::from(stream.source),
                                 sink_port: u32::from(stream.sink),
                             })
                 };
                 Ok(Response::new(reply))
             },
-            Err(error) => Err(Status::internal(error.to_string())),
+            Err(error) => {
+                match error.kind() {
+                    std::io::ErrorKind::AddrInUse => Err(Status::already_exists(format!("Port already in use: {}", error))),
+                    _ => Err(Status::internal(format!("Failed to provision stream: {}", error))),
+                }
+            },
         };
 
         result

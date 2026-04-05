@@ -17,10 +17,10 @@ pub async fn connect_grpc_client() -> StreamerClient<tonic::transport::Channel> 
     client
 }
 
-pub async fn api_provision_stream(client: &mut StreamerClient<tonic::transport::Channel>, source: u32, sink: u32) {
+pub async fn api_provision_stream(client: &mut StreamerClient<tonic::transport::Channel>, source: u16, sink: u16) {
     let request = tonic::Request::new(ProvisionStreamRequest {
-        source_port: source,
-        sink_port: sink,
+        source_port: u32::from(source),
+        sink_port: u32::from(sink),
         description: "My awesome stream".into(),
     });
     let response = client.provision_stream(request).await.unwrap();
@@ -28,7 +28,7 @@ pub async fn api_provision_stream(client: &mut StreamerClient<tonic::transport::
     assert_eq!(response.into_inner().stream.is_some(), true);
 }
 
-pub async fn connect_tcp(port: u32) -> io::Result<TcpStream> {
+pub async fn connect_tcp(port: u16) -> io::Result<TcpStream> {
     let addr = format!("0.0.0.0:{}", port).parse().unwrap();
     
     let socket = TcpSocket::new_v4()?;
@@ -37,7 +37,7 @@ pub async fn connect_tcp(port: u32) -> io::Result<TcpStream> {
     Ok(stream)
 }
 
-pub async fn bind_udp(port: u32) -> io::Result<UdpSocket> {
+pub async fn bind_udp(port: u16) -> io::Result<UdpSocket> {
     let addr = format!("0.0.0.0:{}", port);    
     let stream  = timeout(Duration::from_secs(5), UdpSocket::bind(addr)).await??;
     

@@ -3,9 +3,11 @@ use std::sync::Arc;
 use tracing::info;
 
 mod config;
+mod metrics;
 use config::{Config, InMemoryConfigStore};
 use control_plane::ControlPlane;
 use data_plane::DataPlane;
+use crate::metrics::MetricsExporter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -21,8 +23,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::clone(&config_store), 
         Arc::clone(&data_plane));
  
+    MetricsExporter::new().start();
     data_plane.start().expect("Data plane started");
     control_plane.start(config.server.bind_address).await?;
- 
+     
     Ok(())
 }

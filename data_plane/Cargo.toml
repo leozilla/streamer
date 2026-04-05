@@ -4,10 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bytes = "1"
 dashmap = "6.1.0"
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
-rayon = "1.11.0"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 moka = { version = "0.12", features = ["future"] }
+metrics = "0.24"
+rtp = "0.17.1"
+webrtc-util = "0.17.1"
