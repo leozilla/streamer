@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use tracing::{info, debug, trace, error};
 use dashmap::DashMap;
-use tokio::{net::UdpSocket, sync::{OnceCell, mpsc, Mutex}};
+use tokio::{net::UdpSocket, sync::{OnceCell, mpsc, Mutex}, time::{timeout, Duration}};
 
 use rtp::packet::Packet;
 use webrtc_util::marshal::Unmarshal;
@@ -38,6 +38,7 @@ struct ConnectionManager {
 struct DataRx {
     con_rx: Arc<Mutex<mpsc::Receiver<HandleUdpSocketJob>>>,
     proc_tx: Arc<mpsc::Sender<ProcessingJob>>,
+    rx_timeout: Duration,
 }
 
 struct DataTx {
@@ -250,12 +251,14 @@ impl DataRx {
         Self { 
             con_rx: Arc::new(Mutex::new(con_rx)),            
             proc_tx: Arc::new(proc_tx),
+            rx_timeout: Duration::from_secs(10)
         }
     }
 
     fn start(&self) { 
         let con_rx = Arc::clone(&self.con_rx);
         let proc_tx = Arc::clone(&self.proc_tx);
+        let rx_timeout = self.rx_timeout;
 
         // spawn a Tokio task to handle incoming connection jobs (I/O bound)
         tokio::spawn(async move {
@@ -266,19 +269,19 @@ impl DataRx {
 
                 let proc_tx = Arc::clone(&proc_tx);
 
-                tokio::spawn(Self::process_udp_socket(job, proc_tx));
+                tokio::spawn(Self::process_udp_socket(job, proc_tx, rx_timeout));
             }
         });
     }
 
-    async fn process_udp_socket(job: HandleUdpSocketJob, proc_tx: Arc<mpsc::Sender<ProcessingJob>>) {
+    async fn process_udp_socket(job: HandleUdpSocketJob, proc_tx: Arc<mpsc::Sender<ProcessingJob>>, rx_timeout: Duration) {
         let mut buf = bytes::BytesMut::with_capacity(512);
 
         let socket = job.socket.lock().await;
         loop {
             buf.reserve(512); // Ensure enough contiguous capacity for the next UDP packet
-            match socket.recv_buf_from(&mut buf).await {
-                Ok((n, addr)) if n > 0 => {
+            match timeout(rx_timeout, socket.recv_buf_from(&mut buf)).await {
+                Ok(Ok((n, addr))) if n > 0 => {
                     trace!("Received data on source {} from {:?}", job.source, addr);
                     
                     let data = buf.split().freeze();
@@ -301,6 +304,10 @@ impl DataRx {
                             error!("Failed to parse RTP packet: {}", err);
                         }
                     }
+                }
+                Err(_) => {
+                    info!("Stream timed out on source {}", job.source);
+                    break;
                 }
                 _ => break,
             }

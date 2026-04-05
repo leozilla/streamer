@@ -1,4 +1,5 @@
 totalSupportedStreams: 100
+udpReadTimeout: 5s
 sourcePortRange:
   from: 3000
   to: 4000
