@@ -26,18 +26,18 @@ pub struct DataPlane {
 
 struct StreamRegistry {
     id_counter: AtomicU32,
-    streams: Arc<DashMap<Port, Vec<StreamDescription>>>,
+    streams: DashMap<Port, Vec<StreamDescription>>,
 }
 
 struct ConnectionManager {
-    port_listeners: Arc<Mutex<HashMap<Port, Arc<OnceCell<()>>>>>,
+    port_listeners: Mutex<HashMap<Port, Arc<OnceCell<()>>>>,
     sockets: Arc<DashMap<Port, Arc<Mutex<UdpSocket>>>>,
-    rx_con_tx: Arc<mpsc::Sender<HandleUdpSocketJob>>,
+    con_tx: mpsc::Sender<HandleUdpSocketJob>,
 }
 
 struct DataRx {
     con_rx: Arc<Mutex<mpsc::Receiver<HandleUdpSocketJob>>>,
-    proc_tx: Arc<mpsc::Sender<ProcessingJob>>,
+    proc_tx: mpsc::Sender<ProcessingJob>,
     rx_timeout: Duration,
 }
 
@@ -71,12 +71,12 @@ impl DataPlane {
     pub fn new() -> Self {
         let (proc_tx, proc_rx) = mpsc::channel(1024);
         let (sink_tx, sink_rx) = mpsc::channel(1024);
-        let (rx_con_tx, rx_con_rx) = mpsc::channel(1024);
+        let (con_tx, con_rx) = mpsc::channel(1024);
 
         let stream_registry = Arc::new(StreamRegistry::new());
-        let connection_manager = Arc::new(ConnectionManager::new(rx_con_tx));
+        let connection_manager = Arc::new(ConnectionManager::new(con_tx));
         let processor: Processor = Processor::new(proc_rx, sink_tx);
-        let data_rx = DataRx::new(rx_con_rx, proc_tx);
+        let data_rx = DataRx::new(con_rx, proc_tx);
         let data_tx = DataTx::new(Arc::clone(&stream_registry), Arc::clone(&connection_manager), sink_rx);
 
         Self { 
@@ -130,7 +130,7 @@ impl StreamRegistry {
     fn new() -> Self {
         Self { 
             id_counter: AtomicU32::new(1),
-            streams: Arc::new(DashMap::new()),
+            streams: DashMap::new(),
         }
     }
 
@@ -147,7 +147,7 @@ impl StreamRegistry {
     }
 
     fn list_streams(&self) -> Vec<StreamDescription> {
-        let streams: Vec<StreamDescription> = Arc::clone(&self.streams)
+        let streams: Vec<StreamDescription> = self.streams
             .iter()
             .map(|entry| entry.value().clone())
             .flatten()
@@ -174,10 +174,10 @@ impl StreamRegistry {
 }
 
 impl ConnectionManager {
-    fn new(rx_con_tx: mpsc::Sender<HandleUdpSocketJob>) -> Self {    
+    fn new(con_tx: mpsc::Sender<HandleUdpSocketJob>) -> Self {    
         Self { 
-            port_listeners: Arc::new(Mutex::new(HashMap::new())),
-            rx_con_tx: Arc::new(rx_con_tx),
+            port_listeners: Mutex::new(HashMap::new()),
+            con_tx,
             sockets: Arc::new(DashMap::new()),
         }
     }
@@ -213,11 +213,11 @@ impl ConnectionManager {
     }
 
     async fn connect_source(&self, source: Port) -> io::Result<()> {
-        let rx_con_tx = Arc::clone(&self.rx_con_tx);
+        let con_tx = self.con_tx.clone(); // Sender clones cleanly natively
         let sockets = Arc::clone(&self.sockets);
 
         self.bind(source, move |port, src_socket| {
-            let rx_con_tx = Arc::clone(&rx_con_tx);
+            let con_tx = con_tx.clone();
             let sockets = Arc::clone(&sockets);
 
             async move {
@@ -229,7 +229,7 @@ impl ConnectionManager {
                     socket: socket_arc,
                 };
                 trace!("Submitting {:?}", job);
-                let _ = rx_con_tx.send(job).await;
+                let _ = con_tx.send(job).await;
             }
         }).await
     }
@@ -250,14 +250,14 @@ impl DataRx {
     pub fn new(con_rx: mpsc::Receiver<HandleUdpSocketJob>, proc_tx: mpsc::Sender<ProcessingJob>) -> Self {
         Self { 
             con_rx: Arc::new(Mutex::new(con_rx)),            
-            proc_tx: Arc::new(proc_tx),
+            proc_tx,
             rx_timeout: Duration::from_secs(10)
         }
     }
 
     fn start(&self) { 
         let con_rx = Arc::clone(&self.con_rx);
-        let proc_tx = Arc::clone(&self.proc_tx);
+        let proc_tx = self.proc_tx.clone();
         let rx_timeout = self.rx_timeout;
 
         // spawn a Tokio task to handle incoming connection jobs (I/O bound)
@@ -267,14 +267,14 @@ impl DataRx {
             while let Some(job) = con_rx.recv().await {
                 trace!("Received {:?}", job);
 
-                let proc_tx = Arc::clone(&proc_tx);
+                let proc_tx = proc_tx.clone();
 
                 tokio::spawn(Self::process_udp_socket(job, proc_tx, rx_timeout));
             }
         });
     }
 
-    async fn process_udp_socket(job: HandleUdpSocketJob, proc_tx: Arc<mpsc::Sender<ProcessingJob>>, rx_timeout: Duration) {
+    async fn process_udp_socket(job: HandleUdpSocketJob, proc_tx: mpsc::Sender<ProcessingJob>, rx_timeout: Duration) {
         let mut buf = bytes::BytesMut::with_capacity(512);
 
         let socket = job.socket.lock().await;
@@ -341,7 +341,7 @@ impl DataTx {
         });
     }
 
-    fn write_egress_udp_socket(stream_registry: &Arc<StreamRegistry>, connection_manager: &Arc<ConnectionManager>, job: SinkWriteJob) {
+    fn write_egress_udp_socket(stream_registry: &StreamRegistry, connection_manager: &ConnectionManager, job: SinkWriteJob) {
         stream_registry.for_each_stream_by_source(job.source, |stream| {
             let sink_port = stream.sink;
             let sink_socket = connection_manager.get_connection(&sink_port).unwrap();
