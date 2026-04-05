@@ -236,8 +236,10 @@ impl ConnectionManager {
     async fn connect_sink(&self, sink: Port) -> io::Result<()> {
         if !self.sockets.contains_key(&sink) {
             let sink_socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
-            info!("Egress socket for sink port {} opened", sink);
-            self.sockets.insert(sink, Arc::new(Mutex::new(sink_socket)));
+            self.sockets.entry(sink).or_insert_with(|| {
+                info!("Egress socket for sink port {} opened", sink);
+                Arc::new(Mutex::new(sink_socket))
+            });
         }
         Ok(())
     }
