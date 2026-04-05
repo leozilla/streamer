@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use tracing::info;
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 mod config;
 mod metrics;
@@ -11,7 +12,7 @@ use crate::metrics::MetricsExporter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt::init();
+    init_tracing();
     info!("Starting streamer service");
  
     let config: Config = Config::parse().expect("Config parsed");
@@ -28,4 +29,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     control_plane.start(config.server.bind_address).await?;
      
     Ok(())
+}
+
+fn init_tracing() {
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| {
+            // If no RUST_LOG env var is set, use this default:
+            // "streamer=trace" -> allows TRACE in your code
+            // "info" -> limits everything else to INFO
+            EnvFilter::new("info")
+        });
+
+    // 2. Build the subscriber
+    tracing_subscriber::registry()
+        .with(fmt::layer())
+        .with(filter)
+        .init();
 }

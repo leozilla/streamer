@@ -30,13 +30,13 @@ struct StreamRegistry {
 }
 
 struct ConnectionManager {
-    port_listeners: Mutex<HashMap<Port, Arc<OnceCell<()>>>>,
+    listeners: Mutex<HashMap<Port, Arc<OnceCell<()>>>>,
     sockets: Arc<DashMap<Port, Arc<Mutex<UdpSocket>>>>,
-    con_tx: mpsc::Sender<HandleUdpSocketJob>,
+    con_tx: mpsc::Sender<SourceRxJob>,
 }
 
 struct DataRx {
-    con_rx: Arc<Mutex<mpsc::Receiver<HandleUdpSocketJob>>>,
+    con_rx: Arc<Mutex<mpsc::Receiver<SourceRxJob>>>,
     proc_tx: mpsc::Sender<ProcessingJob>,
     rx_timeout: Duration,
 }
@@ -44,7 +44,7 @@ struct DataRx {
 struct DataTx {
     stream_registry: Arc<StreamRegistry>,
     connection_manager: Arc<ConnectionManager>,
-    sink_rx: Arc<Mutex<mpsc::Receiver<SinkWriteJob>>>,
+    sink_rx: Arc<Mutex<mpsc::Receiver<SinkTxJob>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -56,13 +56,13 @@ pub struct ProcessingJob {
 }
 
 #[derive(Clone, Debug)]
-pub struct SinkWriteJob {
+pub struct SinkTxJob {
     data: bytes::Bytes,
     source: Port,
 }
 
 #[derive(Clone, Debug)]
-struct HandleUdpSocketJob {
+struct SourceRxJob {
     source: Port,
     socket: Arc<Mutex<UdpSocket>>,
 }
@@ -174,9 +174,9 @@ impl StreamRegistry {
 }
 
 impl ConnectionManager {
-    fn new(con_tx: mpsc::Sender<HandleUdpSocketJob>) -> Self {    
+    fn new(con_tx: mpsc::Sender<SourceRxJob>) -> Self {    
         Self { 
-            port_listeners: Mutex::new(HashMap::new()),
+            listeners: Mutex::new(HashMap::new()),
             con_tx,
             sockets: Arc::new(DashMap::new()),
         }
@@ -192,8 +192,8 @@ impl ConnectionManager {
         Fut: Future<Output = ()> + Send + 'static,
     {
         let cell = {
-            let mut map = self.port_listeners.lock().await;
-            let cell = map.entry(port).or_insert_with(|| Arc::new(OnceCell::new()));
+            let mut listeners = self.listeners.lock().await;
+            let cell = listeners.entry(port).or_insert_with(|| Arc::new(OnceCell::new()));
             Arc::clone(cell)
         };
 
@@ -224,7 +224,7 @@ impl ConnectionManager {
                 let socket_arc = Arc::new(Mutex::new(src_socket));
                 sockets.insert(port, Arc::clone(&socket_arc));
 
-                let job = HandleUdpSocketJob {
+                let job = SourceRxJob {
                     source: port,
                     socket: socket_arc,
                 };
@@ -247,7 +247,7 @@ impl ConnectionManager {
 }
 
 impl DataRx {
-    pub fn new(con_rx: mpsc::Receiver<HandleUdpSocketJob>, proc_tx: mpsc::Sender<ProcessingJob>) -> Self {
+    pub fn new(con_rx: mpsc::Receiver<SourceRxJob>, proc_tx: mpsc::Sender<ProcessingJob>) -> Self {
         Self { 
             con_rx: Arc::new(Mutex::new(con_rx)),            
             proc_tx,
@@ -274,7 +274,7 @@ impl DataRx {
         });
     }
 
-    async fn process_udp_socket(job: HandleUdpSocketJob, proc_tx: mpsc::Sender<ProcessingJob>, rx_timeout: Duration) {
+    async fn process_udp_socket(job: SourceRxJob, proc_tx: mpsc::Sender<ProcessingJob>, rx_timeout: Duration) {
         let mut buf = bytes::BytesMut::with_capacity(512);
 
         let socket = job.socket.lock().await;
@@ -282,7 +282,7 @@ impl DataRx {
             buf.reserve(512); // Ensure enough contiguous capacity for the next UDP packet
             match timeout(rx_timeout, socket.recv_buf_from(&mut buf)).await {
                 Ok(Ok((n, addr))) if n > 0 => {
-                    trace!("Received data on source {} from {:?}", job.source, addr);
+                    trace!("Received data on source {} from {:?}, bytes={}", job.source, addr, n);
                     
                     let data = buf.split().freeze();
                     let mut data_reader = data.clone();
@@ -290,7 +290,7 @@ impl DataRx {
                     match Packet::unmarshal(&mut data_reader) {
                         Ok(rtp_packet) => {
                             let seq = rtp_packet.header.sequence_number;
-                            trace!("Received RTP packet on source {}, seq={}", job.source, seq);
+                            trace!("Received RTP packet on source {}, seq={}, bytes={}", job.source, seq, n);
                             
                             let job = ProcessingJob {
                                 data, // Forward the entire raw packet so sinks get a valid RTP stream
@@ -298,6 +298,7 @@ impl DataRx {
                                 n,
                                 source: job.source
                             };
+                            trace!("Submitting ProcessingJob source {}, seq={}, bytes={}", job.source, seq, n);
                             proc_tx.send(job).await.unwrap();
                         }
                         Err(err) => {
@@ -316,7 +317,7 @@ impl DataRx {
 }
 
 impl DataTx {
-    fn new(stream_registry: Arc<StreamRegistry>, connection_manager: Arc<ConnectionManager>, sink_rx: mpsc::Receiver<SinkWriteJob>,) -> Self {
+    fn new(stream_registry: Arc<StreamRegistry>, connection_manager: Arc<ConnectionManager>, sink_rx: mpsc::Receiver<SinkTxJob>,) -> Self {
         Self {
             stream_registry,
             connection_manager,
@@ -334,14 +335,14 @@ impl DataTx {
             let mut sink_rx = sink_rx.lock().await;
 
             while let Some(job) = sink_rx.recv().await {
-                trace!("Received SinkWriteJob, source={}, bytes={}", job.source, job.data.len());
+                trace!("Received SinkTxJob, source={}, bytes={}", job.source, job.data.len());
 
                 Self::write_egress_udp_socket(&stream_registry, &connection_manager, job);
             }
         });
     }
 
-    fn write_egress_udp_socket(stream_registry: &StreamRegistry, connection_manager: &ConnectionManager, job: SinkWriteJob) {
+    fn write_egress_udp_socket(stream_registry: &StreamRegistry, connection_manager: &ConnectionManager, job: SinkTxJob) {
         stream_registry.for_each_stream_by_source(job.source, |stream| {
             let sink_port = stream.sink;
             let sink_socket = connection_manager.get_connection(&sink_port).unwrap();
