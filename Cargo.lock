@@ -1410,16 +1410,19 @@ dependencies = [
 name = "streamer"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "control_plane",
  "data_plane",
  "metrics",
  "metrics-exporter-prometheus",
+ "rtp",
  "serde",
  "serde_yaml",
  "tokio",
  "tonic",
  "tracing",
  "tracing-subscriber",
+ "webrtc-util",
 ]
 
 [[package]]

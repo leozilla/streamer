@@ -21,5 +21,8 @@ metrics = "0.24"
 metrics-exporter-prometheus = "0.18.1"
 
 [dev-dependencies]
+bytes = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 tonic = { version = "0.13" }
+rtp = "0.17.1"
+webrtc-util = "0.17.1"

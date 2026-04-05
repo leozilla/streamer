@@ -1,8 +1,9 @@
 mod common;
 
-use std::net::SocketAddr;
-
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, try_join};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}};
+use rtp::packet::Packet;
+use rtp::header::Header;
+use webrtc_util::marshal::Marshal;
 
 use control_plane::api::*;
 
@@ -81,21 +82,30 @@ async fn test_stream_udp_data_flow_integration() {
     let _ = common::api_provision_stream(&mut client, src_port, sink_port1).await;
     let _ = common::api_provision_stream(&mut client, src_port, sink_port2).await;
 
-    let socket = common::bind_udp(0).await.expect("UDP tx socket");
+    let tx_socket = common::bind_udp(0).await.expect("UDP tx socket");
+    let rx_socket1 = common::bind_udp(sink_port1).await.expect("UDP rx socket 1");
+    let rx_socket2 = common::bind_udp(sink_port2).await.expect("UDP rx socket 2");
 
     let addr = format!("0.0.0.0:{}", src_port);
-    let data = "Hello".as_bytes();
-    socket.send_to(&data, addr).await.expect("Failed to write to stream");
+    
+    let rtp_packet = Packet {
+        header: Header {
+            version: 2,
+            sequence_number: 1,
+            ..Default::default()
+        },
+        payload: bytes::Bytes::from_static(b"Hello"),
+    };
+    let data = rtp_packet.marshal().expect("Failed to marshal RTP packet");
+    tx_socket.send_to(&data, addr).await.expect("Failed to write to stream");
 
-    let mut buf1 = [0u8; 5];
-    let mut buf2 = [0u8; 5];
+    let mut buf = [0u8; 1024];
     
-    let (_, addr1) = socket.recv_from(&mut buf1).await.expect("Failed to read from UDP socket");
+    let (n, _) = rx_socket1.recv_from(&mut buf).await.expect("Failed to read from UDP socket 1");
+    assert_eq!(&buf[..n], data.as_ref());
     
-    assert_eq!(buf2, data);
-    // assert_eq!(addr1, SocketAddr::from(([0, 0, 0, 0], sink_port2)));
-    assert_eq!(buf1, data);
-    // assert_eq!(addr2, SocketAddr::from(([0, 0, 0, 0], sink_port1)));
+    let (n, _) = rx_socket2.recv_from(&mut buf).await.expect("Failed to read from UDP socket 1");
+    assert_eq!(&buf[..n], data.as_ref());
 }
 
 // cargo test test_pipeline_throughput --release -- --ignored --nocapture
@@ -119,7 +129,15 @@ async fn test_pipeline_throughput() {
     // Receiver socket listening on the sink port
     let rx_socket = common::bind_udp(sink_port).await.expect("UDP rx socket");
 
-    let payload = vec![0u8; 1024]; // 1 KB packets
+    let rtp_packet = Packet {
+        header: Header {
+            version: 2,
+            sequence_number: 1,
+            ..Default::default()
+        },
+        payload: bytes::Bytes::from(vec![0u8; 1000]),
+    };
+    let payload = rtp_packet.marshal().expect("Failed to marshal RTP packet");
     let num_packets = 100_000; // ~100 MB total
 
     let start_time = std::time::Instant::now();
