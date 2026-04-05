@@ -120,7 +120,7 @@ async fn test_pipeline_throughput() {
     let _ = common::api_provision_stream(&mut client, src_port, sink_port).await;
 
     // Allow time for sockets to bind
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     // Sender socket blasting data to the streamer
     let tx_socket = std::sync::Arc::new(common::bind_udp(0).await.expect("UDP tx socket"));

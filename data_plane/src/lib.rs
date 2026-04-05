@@ -255,7 +255,7 @@ impl DataRx {
 
     fn start(&self) { 
         let con_rx = Arc::clone(&self.con_rx);
-        let source_tx = Arc::clone(&self.proc_tx);
+        let proc_tx = Arc::clone(&self.proc_tx);
 
         // spawn a Tokio task to handle incoming connection jobs (I/O bound)
         tokio::spawn(async move {
@@ -264,45 +264,47 @@ impl DataRx {
             while let Some(job) = con_rx.recv().await {
                 trace!("Received {:?}", job);
 
-                let source_tx = Arc::clone(&source_tx);
+                let proc_tx = Arc::clone(&proc_tx);
 
-                tokio::spawn(async move {
-                    let mut buf = bytes::BytesMut::with_capacity(1024);
-
-                    let socket = job.socket.lock().await;
-                    loop {
-                        buf.reserve(1024); // Ensure enough contiguous capacity for the next UDP packet
-                        match socket.recv_buf_from(&mut buf).await {
-                            Ok((n, addr)) if n > 0 => {
-                                trace!("Received data on source {} from {:?}", job.source, addr);
-                                
-                                let data = buf.split().freeze();
-                                let mut data_reader = data.clone();
-                                
-                                match Packet::unmarshal(&mut data_reader) {
-                                    Ok(rtp_packet) => {
-                                        let seq = rtp_packet.header.sequence_number;
-                                        trace!("Received RTP packet on source {}, seq={}", job.source, seq);
-                                        
-                                        let job = ProcessingJob {
-                                            data, // Forward the entire raw packet so sinks get a valid RTP stream
-                                            sequence_number: seq,
-                                            n,
-                                            source: job.source
-                                        };
-                                        source_tx.send(job).await.unwrap();
-                                    }
-                                    Err(err) => {
-                                        error!("Failed to parse RTP packet: {}", err);
-                                    }
-                                }
-                            }
-                            _ => break,
-                        }
-                    }
-                });
+                tokio::spawn(Self::process_udp_socket(job, proc_tx));
             }
         });
+    }
+
+    async fn process_udp_socket(job: HandleUdpSocketJob, proc_tx: Arc<mpsc::Sender<ProcessingJob>>) {
+        let mut buf = bytes::BytesMut::with_capacity(512);
+
+        let socket = job.socket.lock().await;
+        loop {
+            buf.reserve(512); // Ensure enough contiguous capacity for the next UDP packet
+            match socket.recv_buf_from(&mut buf).await {
+                Ok((n, addr)) if n > 0 => {
+                    trace!("Received data on source {} from {:?}", job.source, addr);
+                    
+                    let data = buf.split().freeze();
+                    let mut data_reader = data.clone();
+                    
+                    match Packet::unmarshal(&mut data_reader) {
+                        Ok(rtp_packet) => {
+                            let seq = rtp_packet.header.sequence_number;
+                            trace!("Received RTP packet on source {}, seq={}", job.source, seq);
+                            
+                            let job = ProcessingJob {
+                                data, // Forward the entire raw packet so sinks get a valid RTP stream
+                                sequence_number: seq,
+                                n,
+                                source: job.source
+                            };
+                            proc_tx.send(job).await.unwrap();
+                        }
+                        Err(err) => {
+                            error!("Failed to parse RTP packet: {}", err);
+                        }
+                    }
+                }
+                _ => break,
+            }
+        }
     }
 }
 
@@ -327,20 +329,24 @@ impl DataTx {
             while let Some(job) = sink_rx.recv().await {
                 trace!("Received SinkWriteJob, source={}, bytes={}", job.source, job.data.len());
 
-                stream_registry.for_each_stream_by_source(job.source, |stream| {
-                    let sink_port = stream.sink;
-                    let sink_socket = connection_manager.get_connection(&sink_port).unwrap();
-                    let data = job.data.clone(); // `Bytes::clone` is an extremely cheap pointer copy
-                    
-                    tokio::spawn(async move {
-                        let sink_socket = sink_socket.lock().await;
-                        let addr = format!("0.0.0.0:{}", sink_port);
-                        let _ = sink_socket.send_to(&data, addr).await;
-
-                        trace!("Data flushed on sink {}", sink_port);
-                    });
-                });
+                Self::write_egress_udp_socket(&stream_registry, &connection_manager, job);
             }
+        });
+    }
+
+    fn write_egress_udp_socket(stream_registry: &Arc<StreamRegistry>, connection_manager: &Arc<ConnectionManager>, job: SinkWriteJob) {
+        stream_registry.for_each_stream_by_source(job.source, |stream| {
+            let sink_port = stream.sink;
+            let sink_socket = connection_manager.get_connection(&sink_port).unwrap();
+            let data = job.data.clone(); // `Bytes::clone` is an extremely cheap pointer copy
+        
+            tokio::spawn(async move {
+                let sink_socket = sink_socket.lock().await;
+                let addr = format!("0.0.0.0:{}", sink_port);
+                let _ = sink_socket.send_to(&data, addr).await;
+
+                trace!("Data flushed on sink {}", sink_port);
+            });
         });
     }
 }
