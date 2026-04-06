@@ -1,16 +1,15 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::atomic::AtomicBool};
 use std::sync::Arc;
 
+use axum::extract::ws;
 use axum::{
-    extract::{ws::{Message, WebSocket, WebSocketUpgrade}, ConnectInfo, State},
-    response::Response,
-    routing::get,
-    Router,
+    Router, extract::{ConnectInfo, State, ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade}}, response::Response, routing::get
 };
 use serde::Serialize;
 use tower_http::services::ServeDir;
 use tracing::{debug, trace, error};
 use data_plane::DataPlane;
+use tracing_subscriber::registry::Data;
 
 pub mod ws_api {
     tonic::include_proto!("ws_api");
@@ -71,24 +70,7 @@ impl WebServer {
 
                     match msg {
                         Message::Text(text) => {
-                            trace!("Received text from client: {}", text);
-                            
-                            match serde_json::from_str::<ws_api::WsRx>(&text) {
-                                Ok(request) => {
-                                    debug!("Handling {:?}", request);
-
-                                    match request.payload {
-                                        Some(ws_api::ws_rx::Payload::SubscribeRequest(request)) => {                           
-                                            Self::handle_subscribe_streams_req(&mut socket, request, &data_plane).await;
-                                            is_subscribed = true;
-                                        },
-                                        None => {}
-                                    }                                  
-                                }
-                                Err(e) => {
-                                    eprintln!("Failed to deserialize JSON to SubscribeStreamsRequest: {}", e);
-                                }
-                            }
+                            Self::handle_text_message(&mut socket, data_plane.clone(), &mut is_subscribed, text).await;                            
                         }
                         Message::Close(_) => {
                             debug!("Client initiated a clean disconnect {:?}", socket);
@@ -102,14 +84,45 @@ impl WebServer {
                 
                 // 2. Handle outgoing event updates from the DataPlane
                 Ok(data_event) = event_rx.recv(), if is_subscribed => {
-                    let update = ws_api::StreamProvisionedEvent {
-                        id: "1".to_string(),
-                        source_port: 1,
-                        sink_port: 2,
-                    };
-                    
-                    Self::send_json_reply(&mut socket, update).await;
+                    match data_event {
+                        data_plane::DataPlaneEvent::StreamProvisioned { id, source_port, sink_port } => {
+                            let evt = ws_api::StreamProvisionedEvent {
+                                id,
+                                source_port,
+                                sink_port,
+                            };
+                            let tx = ws_api::WsTx {
+                                payload: Some(ws_api::ws_tx::Payload::StreamProvisionedEvent(evt))
+                            };
+                            Self::send_json_reply(&mut socket, tx).await;
+                        }
+                        data_plane::DataPlaneEvent::StreamUpdated { id: _ } => {
+                            // Example: map to another ws_api event here
+                            // Self::send_json_reply(&mut socket, ws_api::StreamRemovedEvent { id }).await;
+                        }
+                    }
                 }
+            }
+        }
+    }
+
+    async fn handle_text_message(socket: &mut WebSocket, data_plane: Arc<DataPlane>, is_subscribed: &mut bool, text: Utf8Bytes) {
+        trace!("Received text from client: {}", text);
+        
+        match serde_json::from_str::<ws_api::WsRx>(&text) {
+            Ok(request) => {
+                debug!("Handling {:?}", request);
+
+                match request.payload {
+                    Some(ws_api::ws_rx::Payload::SubscribeRequest(request)) => {                           
+                        Self::handle_subscribe_streams_req(socket, request, &data_plane).await;
+                        *is_subscribed = true;
+                    },
+                    None => {}
+                }                                  
+            }
+            Err(e) => {
+                eprintln!("Failed to deserialize JSON to SubscribeStreamsRequest: {}", e);
             }
         }
     }
@@ -120,7 +133,10 @@ impl WebServer {
             message: "Succees".to_string()
         };
 
-        Self::send_json_reply(socket, reply).await;
+        let tx = ws_api::WsTx {
+            payload: Some(ws_api::ws_tx::Payload::SubscribeReply(reply))
+        };
+        Self::send_json_reply(socket, tx).await;
     }
 
     async fn send_json_reply<T>(socket: &mut WebSocket, reply: T) 

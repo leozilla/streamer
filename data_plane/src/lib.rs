@@ -69,7 +69,15 @@ struct SourceRxJob {
 }
 
 #[derive(Clone, Debug)]
-pub struct DataPlaneEvent {
+pub enum DataPlaneEvent {
+    StreamProvisioned {
+        id: String,
+        source_port: u32,
+        sink_port: u32,
+    },
+    StreamUpdated {
+        id: String,
+    },
 }
 
 impl DataPlane {
@@ -127,13 +135,16 @@ impl DataPlane {
         let stream = self.stream_registry.add_stream(source, sink);
         info!("New stream with Id {} provisioned {} -> {}", stream.id, source, sink);
 
-        self.notify_stream_provisioned();
+        self.notify_stream_provisioned(&stream);
         
         Ok(stream)
     }
         
-    fn notify_stream_provisioned(&self) {
-        let event = DataPlaneEvent {
+    fn notify_stream_provisioned(&self, stream: &StreamDescription) {
+        let event = DataPlaneEvent::StreamProvisioned { 
+            id: stream.id.clone(), 
+            source_port: u32::from(stream.source), 
+            sink_port: u32::from(stream.sink)
         };
         let _ = self.event_tx.send(event);
     }

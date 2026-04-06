@@ -14,6 +14,7 @@ message SubscribeStreamsRequest {
 message WsTx {
     oneof payload {
         SubscribeStreamsReply subscribe_reply = 1;
+        StreamProvisionedEvent stream_provisioned_event = 2;
     }
 }
 
