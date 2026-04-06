@@ -1,7 +1,6 @@
 mod grpc;
 mod web;
 pub mod config_store;
-use axum::extract::ws::WebSocket;
 pub use grpc::grpc_api;
 
 use std::net::SocketAddr;

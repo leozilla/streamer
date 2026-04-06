@@ -36,11 +36,30 @@
             syntax = "proto3";
             package ws_api;
 
+            message WsRx {
+                oneof payload {
+                    SubscribeStreamsRequest subscribe_request = 1;
+                }
+            }
+
+            message WsTx {
+                oneof payload {
+                    SubscribeStreamsReply subscribe_reply = 1;
+                    StreamProvisionedEvent stream_provisioned_event = 2;
+                }
+            }
+
             message SubscribeStreamsRequest {}
 
             message SubscribeStreamsReply {
                 uint32 status = 1;
                 string message = 2;
+            }
+
+            message StreamProvisionedEvent {
+                string id = 1;
+                uint32 source_port = 2;
+                uint32 sink_port = 3;
             }
         `;
 
@@ -48,11 +67,8 @@
             // Parse the protobuf definition
             const parsed = protobuf.parse(protoDefinition);
             const root = parsed.root;
-            
-            const SubscribeStreamsRequest = root.lookupType("ws_api.SubscribeStreamsRequest");
-            const SubscribeStreamsReply = root.lookupType("ws_api.SubscribeStreamsReply");
 
-            // Connect to the WebSocket (Update the port 8080 if your server runs elsewhere)
+            // Connect to the WebSocket (Syncing port to 3000 to match backend)
             const wsUrl = `ws://${window.location.hostname || 'localhost'}:3000/ws`;
             const ws = new WebSocket(wsUrl);
 
@@ -61,19 +77,29 @@
                 statusEl.className = 'status-connected';
                 log(`Connected to ${wsUrl}`);
 
-                // Create and encode the SubscribeStreamsRequest message
-                const message = SubscribeStreamsRequest.create({});
+                // Send the WsRx wrapper with the SubscribeRequest variant
+                const message = {
+                    payload: {
+                        SubscribeRequest: {}
+                    }
+                };
                 const jsonPayload = JSON.stringify(message);
-
+                
                 ws.send(jsonPayload);
-                log('Sent SubscribeStreamsRequest as JSON');
+                log('Sent WsRx (SubscribeRequest) as JSON');
             };
 
             ws.onmessage = (event) => {
                 try {
-                    // Parse incoming JSON data
-                    const reply = JSON.parse(event.data);
-                    log(`Received SubscribeStreamsReply: ${JSON.stringify(reply)}`);
+                    const msg = JSON.parse(event.data);
+                    
+                    if (msg.payload && msg.payload.SubscribeReply) {
+                        log(`Received SubscribeReply: ${JSON.stringify(msg.payload.SubscribeReply)}`);
+                    } else if (msg.payload && msg.payload.StreamProvisionedEvent) {
+                        log(`Received StreamProvisionedEvent: ${JSON.stringify(msg.payload.StreamProvisionedEvent)}`);
+                    } else {
+                        log(`Received unknown message: ${JSON.stringify(msg)}`);
+                    }
                 } catch (e) {
                     log(`Failed to parse incoming JSON: ${e.message}`);
                 }
