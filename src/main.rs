@@ -26,7 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
  
     MetricsExporter::new().start();
     data_plane.start().expect("Data plane started");
-    control_plane.start(config.server.bind_address).await?;
+    control_plane.start(config.server.grpc_bind_addr, config.server.ws_bind_addr).await?;
      
     Ok(())
 }

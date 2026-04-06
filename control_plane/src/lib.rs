@@ -1,6 +1,8 @@
 mod grpc;
+mod web;
 pub mod config_store;
-pub use grpc::api;
+use axum::extract::ws::WebSocket;
+pub use grpc::grpc_api;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -8,8 +10,9 @@ use std::sync::Arc;
 use tracing::info;
 use tonic::transport::Server;
 
-use grpc::api::streamer_server::StreamerServer;
+use grpc::grpc_api::streamer_server::StreamerServer;
 use grpc::StreamerImpl;
+use web::WebServer;
 use data_plane::DataPlane;
 use config_store::ConfigStore;
 
@@ -26,20 +29,25 @@ impl<C: ConfigStore + 'static> ControlPlane<C> {
         }
     }
     
-    pub async fn start(&self, addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn start(&self, grpc_server_addr: SocketAddr, ws_server_addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         let streamer = StreamerImpl::new(Arc::clone(&self.config_store), Arc::clone(&self.data_plane));
  
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(include_bytes!(concat!(env!("OUT_DIR"), "/api_descriptor.bin")))
             .build_v1()?;
  
-        info!("Starting control plane. gRPC server listening on {}", addr);
+        info!("Starting control plane. gRPC server listening on {}, WS server listening on {}", grpc_server_addr, ws_server_addr);
  
         Server::builder()
             .add_service(reflection_service)
             .add_service(StreamerServer::new(streamer))
-            .serve(addr)
+            .serve(grpc_server_addr)
             .await?;
+ 
+        info!("Starting control plane. gRPC server listening on {}, WS server listening on {}", grpc_server_addr, ws_server_addr);
+
+        WebServer::new()
+            .start(ws_server_addr).await?;
  
         Ok(())
     }

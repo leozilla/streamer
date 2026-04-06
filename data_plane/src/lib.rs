@@ -290,7 +290,7 @@ impl DataRx {
                     match Packet::unmarshal(&mut data_reader) {
                         Ok(rtp_packet) => {
                             let seq = rtp_packet.header.sequence_number;
-                            trace!("Received RTP packet on source {}, seq={}, bytes={}", job.source, seq, n);
+                            debug!("Received RTP packet on source {}, seq={}, bytes={}", job.source, seq, n);
                             
                             let job = ProcessingJob {
                                 data, // Forward the entire raw packet so sinks get a valid RTP stream

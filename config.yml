@@ -7,4 +7,5 @@ sinkPortRange:
   from: 3000
   to: 4000
 server:
-  port: 50051
+  grpc_port: 50051
+  ws_port: 3000

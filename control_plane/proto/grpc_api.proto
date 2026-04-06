@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package api;
+package grpc_api;
 
 service Streamer {
     rpc GetConfig (GetConfigRequest) returns (GetConfigReply) {}

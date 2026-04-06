@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Streamer Management Console</title>
+    <!-- Load protobuf.js for working with protobuf messages in the browser -->
+    <script src="https://cdn.jsdelivr.net/npm/protobufjs@7.2.5/dist/protobuf.min.js"></script>
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        #log { background: #f4f4f4; padding: 10px; height: 400px; overflow-y: auto; font-family: monospace; border: 1px solid #ccc; }
+        .status-connected { color: green; font-weight: bold; }
+        .status-disconnected { color: red; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>Streamer Management Console</h1>
+    <p>WebSocket Status: <span id="status" class="status-disconnected">Disconnected</span></p>
+    
+    <h2>Activity Log</h2>
+    <div id="log"></div>
+
+    <script>
+        const logEl = document.getElementById('log');
+        const statusEl = document.getElementById('status');
+        
+        function log(message) {
+            const el = document.createElement('div');
+            el.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logEl.appendChild(el);
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        // Define the proto schema directly in the client
+        const protoDefinition = `
+            syntax = "proto3";
+            package ws_api;
+
+            message SubscribeStreamsRequest {}
+
+            message SubscribeStreamsReply {
+                uint32 status = 1;
+                string message = 2;
+            }
+        `;
+
+        try {
+            // Parse the protobuf definition
+            const parsed = protobuf.parse(protoDefinition);
+            const root = parsed.root;
+            
+            const SubscribeStreamsRequest = root.lookupType("ws_api.SubscribeStreamsRequest");
+            const SubscribeStreamsReply = root.lookupType("ws_api.SubscribeStreamsReply");
+
+            // Connect to the WebSocket (Update the port 8080 if your server runs elsewhere)
+            const wsUrl = `ws://${window.location.hostname || 'localhost'}:8080/ws`;
+            const ws = new WebSocket(wsUrl);
+            ws.binaryType = 'arraybuffer'; // Crucial for receiving binary protobuf payloads
+
+            ws.onopen = () => {
+                statusEl.textContent = 'Connected';
+                statusEl.className = 'status-connected';
+                log(`Connected to ${wsUrl}`);
+
+                // Create and encode the SubscribeStreamsRequest message
+                const message = SubscribeStreamsRequest.create({});
+                const buffer = SubscribeStreamsRequest.encode(message).finish();
+
+                ws.send(buffer);
+                log('Sent SubscribeStreamsRequest');
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    // Decode incoming binary data into a SubscribeStreamsReply object
+                    const buffer = new Uint8Array(event.data);
+                    const reply = SubscribeStreamsReply.decode(buffer);
+                    log(`Received SubscribeStreamsReply: ${JSON.stringify(reply)}`);
+                } catch (e) {
+                    log(`Failed to decode incoming message: ${e.message}`);
+                }
+            };
+
+            ws.onclose = () => {
+                statusEl.textContent = 'Disconnected';
+                statusEl.className = 'status-disconnected';
+                log('Connection closed');
+            };
+
+            ws.onerror = (error) => {
+                log(`WebSocket Error occurred`);
+            };
+
+        } catch (error) {
+            log(`Initialization error: ${error.message}`);
+        }
+    </script>
+</body>
+</html>

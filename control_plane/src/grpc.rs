@@ -5,12 +5,12 @@ use tonic::{Request, Response, Status};
 use data_plane::DataPlane;
 use crate::config_store::{ConfigStore, ConfigStoreError};
 
-pub mod api {
-    tonic::include_proto!("api");
+pub mod grpc_api {
+    tonic::include_proto!("grpc_api");
 }
 
-use api::streamer_server::Streamer;
-use api::*;
+use grpc_api::streamer_server::Streamer;
+use grpc_api::*;
 
 pub struct StreamerImpl<C: ConfigStore> {
     config_store: Arc<C>,
@@ -66,7 +66,7 @@ impl<C: ConfigStore + 'static> Streamer for StreamerImpl<C> {
                 .into_iter()
                 .map(|stream|
                     ShortStreamDescription {
-                        id: "todo".to_string(),
+                        id: stream.id,
                         source_port: u32::from(stream.source),
                         sink_port: u32::from(stream.sink),
                     }

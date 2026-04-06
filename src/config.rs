@@ -26,8 +26,10 @@ pub struct PortRangeConfig {
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerConfig {
-    #[serde(rename = "port", deserialize_with = "deserialize_port_to_socket_addr")]
-    pub bind_address: SocketAddr,
+    #[serde(rename = "grpc_port", deserialize_with = "deserialize_port_to_socket_addr")]
+    pub grpc_bind_addr: SocketAddr,
+    #[serde(rename = "ws_port", deserialize_with = "deserialize_port_to_socket_addr")]
+    pub ws_bind_addr: SocketAddr,
 }
 
 fn deserialize_port_to_socket_addr<'de, D>(deserializer: D) -> Result<SocketAddr, D::Error>
@@ -55,7 +57,7 @@ impl Config {
         info!("Total supported streams: {}", self.total_supported_streams);
         info!("Source port range: {}", self.source_port_range);
         info!("Sink port range: {}", self.sink_port_range);
-        info!("Server address: {}", self.server.bind_address);
+        info!("Server address: {}", self.server.grpc_bind_addr);
     }
 }
 

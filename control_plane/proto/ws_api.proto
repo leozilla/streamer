@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package ws_api;
+
+message SubscribeStreamsRequest {
+}
+
+message SubscribeStreamsReply {
+    uint32 status = 1;
+    string message = 2;
+}
+
+/*
+// used when only interessted if a new stream was provisioned or the streams was updated
+SubscribeStreamProvisioningRequest
+StreamProvisioned
+StreamUpdated
+StreamDeprovisioned
+
+// used to display the full graph and be able to visualize when data flows th
+SubscribeGraphRequest
+GraphUpdated
+DataFlowUpdate
+*/

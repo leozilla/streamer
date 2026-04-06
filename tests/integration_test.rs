@@ -5,7 +5,7 @@ use rtp::packet::Packet;
 use rtp::header::Header;
 use webrtc_util::marshal::Marshal;
 
-use control_plane::api::*;
+use control_plane::grpc_api::*;
 
 #[tokio::test]
 #[ignore]
