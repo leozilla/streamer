@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use tracing::{info, debug, trace, error};
 use dashmap::DashMap;
-use tokio::{net::UdpSocket, sync::{OnceCell, mpsc, Mutex}, time::{timeout, Duration}};
+use tokio::{net::UdpSocket, sync::{OnceCell, mpsc, Mutex, broadcast}, time::{timeout, Duration}};
 
 use rtp::packet::Packet;
 use webrtc_util::marshal::Unmarshal;
@@ -22,6 +22,7 @@ pub struct DataPlane {
     processor: Processor,
     data_rx: DataRx,
     data_tx: DataTx,
+    event_tx: broadcast::Sender<DataPlaneEvent>,
 }
 
 struct StreamRegistry {
@@ -67,11 +68,16 @@ struct SourceRxJob {
     socket: Arc<Mutex<UdpSocket>>,
 }
 
+#[derive(Clone, Debug)]
+pub struct DataPlaneEvent {
+}
+
 impl DataPlane {
     pub fn new() -> Self {
         let (proc_tx, proc_rx) = mpsc::channel(1024);
         let (sink_tx, sink_rx) = mpsc::channel(1024);
         let (con_tx, con_rx) = mpsc::channel(1024);
+        let (event_tx, _event_rx) = broadcast::channel(100);
 
         let stream_registry = Arc::new(StreamRegistry::new());
         let connection_manager = Arc::new(ConnectionManager::new(con_tx));
@@ -85,6 +91,7 @@ impl DataPlane {
             processor,
             data_rx,
             data_tx,
+            event_tx,
         }
     }
     
@@ -96,6 +103,10 @@ impl DataPlane {
         self.processor.start();
 
         Ok(())
+    }
+
+    pub fn subscribe_events(&self) -> broadcast::Receiver<DataPlaneEvent> {
+        self.event_tx.subscribe()
     }
 
     pub fn list_provisioned_streams(&self) -> Vec<StreamDescription> {
@@ -115,7 +126,16 @@ impl DataPlane {
 
         let stream = self.stream_registry.add_stream(source, sink);
         info!("New stream with Id {} provisioned {} -> {}", stream.id, source, sink);
+
+        self.notify_stream_provisioned();
+        
         Ok(stream)
+    }
+        
+    fn notify_stream_provisioned(&self) {
+        let event = DataPlaneEvent {
+        };
+        let _ = self.event_tx.send(event);
     }
 }
 

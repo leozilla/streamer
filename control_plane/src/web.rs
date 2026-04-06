@@ -53,9 +53,7 @@ impl WebServer {
     async fn handle_socket(mut socket: WebSocket, peer: SocketAddr, data_plane: Arc<DataPlane>) {
         debug!("Client connected {:}", peer);
 
-        // TODO: Replace this interval with a channel receiver from your DataPlane
-        // e.g., `let mut event_rx = data_plane.subscribe_events();`
-        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
+        let mut event_rx = data_plane.subscribe_events();
         let mut is_subscribed = false;
 
         loop {
@@ -75,11 +73,17 @@ impl WebServer {
                         Message::Text(text) => {
                             trace!("Received text from client: {}", text);
                             
-                            match serde_json::from_str::<ws_api::SubscribeStreamsRequest>(&text) {
+                            match serde_json::from_str::<ws_api::WsRx>(&text) {
                                 Ok(request) => {
-                                    debug!("Handling {:?}", request);                            
-                                    Self::handle_subscribe_streams_req(&mut socket, request, &data_plane).await;
-                                    is_subscribed = true;
+                                    debug!("Handling {:?}", request);
+
+                                    match request.payload {
+                                        Some(ws_api::ws_rx::Payload::SubscribeRequest(request)) => {                           
+                                            Self::handle_subscribe_streams_req(&mut socket, request, &data_plane).await;
+                                            is_subscribed = true;
+                                        },
+                                        None => {}
+                                    }                                  
                                 }
                                 Err(e) => {
                                     eprintln!("Failed to deserialize JSON to SubscribeStreamsRequest: {}", e);
@@ -97,11 +101,11 @@ impl WebServer {
                 }
                 
                 // 2. Handle outgoing event updates from the DataPlane
-                _ = ticker.tick(), if is_subscribed => {
-                    // TODO: Await actual events from `event_rx.recv().await` instead of `ticker.tick()`
-                    let update = ws_api::SubscribeStreamsReply {
-                        status: 1,
-                        message: "Periodic stream update from DataPlane".to_string(),
+                Ok(data_event) = event_rx.recv(), if is_subscribed => {
+                    let update = ws_api::StreamProvisionedEvent {
+                        id: "1".to_string(),
+                        source_port: 1,
+                        sink_port: 2,
                     };
                     
                     Self::send_json_reply(&mut socket, update).await;
