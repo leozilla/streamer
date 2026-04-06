@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use tokio::sync::broadcast;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, trace};
 
 use crate::ProcessingJob;
 use crate::SinkTxJob;
+use crate::DataPlaneEvent;
 
 struct ProcessorMetrics {
     cache: HashMap<u16, (metrics::Counter, metrics::Histogram, metrics::Counter)>,
@@ -15,13 +17,15 @@ struct ProcessorMetrics {
 pub struct Processor {
     proc_rx: Arc<Mutex<mpsc::Receiver<ProcessingJob>>>,
     sink_tx: mpsc::Sender<SinkTxJob>,
+    event_tx: broadcast::Sender<DataPlaneEvent>
 }
 
 impl Processor {
-    pub fn new(proc_rx: mpsc::Receiver<ProcessingJob>, sink_tx: mpsc::Sender<SinkTxJob>) -> Self {
+    pub fn new(proc_rx: mpsc::Receiver<ProcessingJob>, sink_tx: mpsc::Sender<SinkTxJob>, event_tx: broadcast::Sender<DataPlaneEvent>) -> Self {
         Self {
             proc_rx: Arc::new(Mutex::new(proc_rx)),
-            sink_tx
+            sink_tx,
+            event_tx
         }
     }
 

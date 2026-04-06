@@ -39,6 +39,7 @@ struct ConnectionManager {
 struct DataRx {
     con_rx: Arc<Mutex<mpsc::Receiver<SourceRxJob>>>,
     proc_tx: mpsc::Sender<ProcessingJob>,
+    event_tx: broadcast::Sender<DataPlaneEvent>,
     rx_timeout: Duration,
 }
 
@@ -46,6 +47,7 @@ struct DataTx {
     stream_registry: Arc<StreamRegistry>,
     connection_manager: Arc<ConnectionManager>,
     sink_rx: Arc<Mutex<mpsc::Receiver<SinkTxJob>>>,
+    event_tx: broadcast::Sender<DataPlaneEvent>,
 }
 
 #[derive(Clone, Debug)]
@@ -72,11 +74,19 @@ struct SourceRxJob {
 pub enum DataPlaneEvent {
     StreamProvisioned {
         id: String,
-        source_port: u32,
-        sink_port: u32,
+        source_port: u16,
+        sink_port: u16,
     },
-    StreamUpdated {
+    StreamRxActive {
         id: String,
+        port: u16,
+    },
+    StreamProcessingActive {
+        id: String
+    },
+    StreamTxActive {
+        id: String,
+        port: u16,
     },
 }
 
@@ -89,9 +99,9 @@ impl DataPlane {
 
         let stream_registry = Arc::new(StreamRegistry::new());
         let connection_manager = Arc::new(ConnectionManager::new(con_tx));
-        let processor: Processor = Processor::new(proc_rx, sink_tx);
-        let data_rx = DataRx::new(con_rx, proc_tx);
-        let data_tx = DataTx::new(Arc::clone(&stream_registry), Arc::clone(&connection_manager), sink_rx);
+        let processor: Processor = Processor::new(proc_rx, sink_tx, event_tx.clone());
+        let data_rx = DataRx::new(con_rx, proc_tx, event_tx.clone());
+        let data_tx = DataTx::new(Arc::clone(&stream_registry), Arc::clone(&connection_manager), sink_rx, event_tx.clone());
 
         Self { 
             stream_registry,
@@ -143,8 +153,8 @@ impl DataPlane {
     fn notify_stream_provisioned(&self, stream: &StreamDescription) {
         let event = DataPlaneEvent::StreamProvisioned { 
             id: stream.id.clone(), 
-            source_port: u32::from(stream.source), 
-            sink_port: u32::from(stream.sink)
+            source_port: stream.source, 
+            sink_port: stream.sink
         };
         let _ = self.event_tx.send(event);
     }
@@ -278,10 +288,11 @@ impl ConnectionManager {
 }
 
 impl DataRx {
-    pub fn new(con_rx: mpsc::Receiver<SourceRxJob>, proc_tx: mpsc::Sender<ProcessingJob>) -> Self {
+    pub fn new(con_rx: mpsc::Receiver<SourceRxJob>, proc_tx: mpsc::Sender<ProcessingJob>, event_tx: broadcast::Sender<DataPlaneEvent>) -> Self {
         Self { 
             con_rx: Arc::new(Mutex::new(con_rx)),            
             proc_tx,
+            event_tx,
             rx_timeout: Duration::from_secs(10)
         }
     }
@@ -348,11 +359,12 @@ impl DataRx {
 }
 
 impl DataTx {
-    fn new(stream_registry: Arc<StreamRegistry>, connection_manager: Arc<ConnectionManager>, sink_rx: mpsc::Receiver<SinkTxJob>,) -> Self {
+    fn new(stream_registry: Arc<StreamRegistry>, connection_manager: Arc<ConnectionManager>, sink_rx: mpsc::Receiver<SinkTxJob>, event_tx: broadcast::Sender<DataPlaneEvent>) -> Self {
         Self {
             stream_registry,
             connection_manager,
             sink_rx: Arc::new(Mutex::new(sink_rx)),
+            event_tx,
         }
     }
 

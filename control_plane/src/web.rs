@@ -126,15 +126,23 @@ impl WebServer {
             data_plane::DataPlaneEvent::StreamProvisioned { id, source_port, sink_port } => {
                 let evt = ws_api::StreamProvisionedEvent {
                     id,
-                    source_port,
-                    sink_port,
+                    source_port: u32::from(source_port),
+                    sink_port: u32::from(sink_port),
                 };
                 let tx = ws_api::WsTx {
                     payload: Some(ws_api::ws_tx::Payload::StreamProvisionedEvent(evt))
                 };
                 Self::send_json(socket, tx).await;
             }
-            data_plane::DataPlaneEvent::StreamUpdated { id: _ } => {
+            data_plane::DataPlaneEvent::StreamRxActive { id, port } => {
+                // Example: map to another ws_api event here
+                // Self::send_json_reply(&mut socket, ws_api::StreamRemovedEvent { id }).await;
+            }
+            data_plane::DataPlaneEvent::StreamProcessingActive { id } => {
+                // Example: map to another ws_api event here
+                // Self::send_json_reply(&mut socket, ws_api::StreamRemovedEvent { id }).await;
+            }
+            data_plane::DataPlaneEvent::StreamTxActive { id, port } => {
                 // Example: map to another ws_api event here
                 // Self::send_json_reply(&mut socket, ws_api::StreamRemovedEvent { id }).await;
             }
