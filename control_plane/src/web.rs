@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use axum::{
-    extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    extract::{ws::{Message, WebSocket, WebSocketUpgrade}, ConnectInfo},
     response::Response,
     routing::get,
     routing::get_service,
@@ -30,17 +30,19 @@ impl WebServer {
             .route("/ws", get(Self::ws_handler));
 
         let listener = tokio::net::TcpListener::bind(addr).await?;
-        axum::serve(listener, app).await?;
+        axum::serve(
+            listener, 
+            app.into_make_service_with_connect_info::<SocketAddr>()).await?;
 
         Ok(())
     }
 
-    async fn ws_handler(ws: WebSocketUpgrade) -> Response {
-        ws.on_upgrade(Self::handle_socket)
+    async fn ws_handler(ws: WebSocketUpgrade, ConnectInfo(addr): ConnectInfo<SocketAddr>) -> Response {
+        ws.on_upgrade(move |socket| Self::handle_socket(socket, addr))
     }
 
-    async fn handle_socket(mut socket: WebSocket) {
-        debug!("Client connected");
+    async fn handle_socket(mut socket: WebSocket, peer: SocketAddr) {
+        debug!("Client connected {:}", peer);
 
         while let Some(result) = socket.recv().await {
             let msg = match result {
