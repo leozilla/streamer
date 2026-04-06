@@ -4,9 +4,9 @@ use axum::{
     extract::{ws::{Message, WebSocket, WebSocketUpgrade}, ConnectInfo},
     response::Response,
     routing::get,
-    routing::get_service,
     Router,
 };
+use serde::Serialize;
 use tower_http::services::ServeDir;
 use tracing::{debug, trace, error};
 
@@ -55,7 +55,17 @@ impl WebServer {
 
             match msg {
                 Message::Text(text) => {
-                    Self::handle_text_msg(&mut socket, text).await;
+                    trace!("Received text from client: {}", text);
+                    
+                    match serde_json::from_str::<ws_api::SubscribeStreamsRequest>(&text) {
+                        Ok(request) => {
+                            debug!("Handling {:?}", request);                            
+                            Self::handle_subscribe_streams_req(&mut socket, request).await;
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to deserialize JSON to SubscribeStreamsRequest: {}", e);
+                        }
+                    }
                 }
                 Message::Close(_) => {
                     debug!("Client initiated a clean disconnect {:?}", socket);
@@ -68,14 +78,17 @@ impl WebServer {
         }
     }
 
-    async fn handle_text_msg(socket: &mut WebSocket, text: axum::extract::ws::Utf8Bytes) {
-        trace!("Received text from client: {}", text);
-
+    async fn handle_subscribe_streams_req(socket: &mut WebSocket, _: ws_api::SubscribeStreamsRequest) {
         let reply = ws_api::SubscribeStreamsReply {
             status: 0,
             message: "Succees".to_string()
         };
 
+        Self::send_json_reply(socket, reply).await;
+    }
+
+    async fn send_json_reply<T>(socket: &mut WebSocket, reply: T) 
+    where T: Serialize, {
         match serde_json::to_string(&reply) {
             Ok(reply_json_string) => {
                 trace!("Sending JSON: {}", reply_json_string);
