@@ -1,7 +1,6 @@
-use std::{net::SocketAddr, sync::atomic::AtomicBool};
+use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::extract::ws;
 use axum::{
     Router, extract::{ConnectInfo, State, ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade}}, response::Response, routing::get
 };
@@ -9,7 +8,6 @@ use serde::Serialize;
 use tower_http::services::ServeDir;
 use tracing::{debug, trace, error};
 use data_plane::DataPlane;
-use tracing_subscriber::registry::Data;
 
 pub mod ws_api {
     tonic::include_proto!("ws_api");
@@ -84,23 +82,7 @@ impl WebServer {
                 
                 // 2. Handle outgoing event updates from the DataPlane
                 Ok(data_event) = event_rx.recv(), if is_subscribed => {
-                    match data_event {
-                        data_plane::DataPlaneEvent::StreamProvisioned { id, source_port, sink_port } => {
-                            let evt = ws_api::StreamProvisionedEvent {
-                                id,
-                                source_port,
-                                sink_port,
-                            };
-                            let tx = ws_api::WsTx {
-                                payload: Some(ws_api::ws_tx::Payload::StreamProvisionedEvent(evt))
-                            };
-                            Self::send_json_reply(&mut socket, tx).await;
-                        }
-                        data_plane::DataPlaneEvent::StreamUpdated { id: _ } => {
-                            // Example: map to another ws_api event here
-                            // Self::send_json_reply(&mut socket, ws_api::StreamRemovedEvent { id }).await;
-                        }
-                    }
+                    Self::handle_evt(&mut socket, data_event).await;
                 }
             }
         }
@@ -136,10 +118,30 @@ impl WebServer {
         let tx = ws_api::WsTx {
             payload: Some(ws_api::ws_tx::Payload::SubscribeReply(reply))
         };
-        Self::send_json_reply(socket, tx).await;
+        Self::send_json(socket, tx).await;
     }
 
-    async fn send_json_reply<T>(socket: &mut WebSocket, reply: T) 
+    async fn handle_evt(socket: &mut WebSocket, data_event: data_plane::DataPlaneEvent) {
+        match data_event {
+            data_plane::DataPlaneEvent::StreamProvisioned { id, source_port, sink_port } => {
+                let evt = ws_api::StreamProvisionedEvent {
+                    id,
+                    source_port,
+                    sink_port,
+                };
+                let tx = ws_api::WsTx {
+                    payload: Some(ws_api::ws_tx::Payload::StreamProvisionedEvent(evt))
+                };
+                Self::send_json(socket, tx).await;
+            }
+            data_plane::DataPlaneEvent::StreamUpdated { id: _ } => {
+                // Example: map to another ws_api event here
+                // Self::send_json_reply(&mut socket, ws_api::StreamRemovedEvent { id }).await;
+            }
+        }
+    }
+
+    async fn send_json<T>(socket: &mut WebSocket, reply: T) 
     where T: Serialize, {
         match serde_json::to_string(&reply) {
             Ok(reply_json_string) => {
