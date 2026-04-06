@@ -52,7 +52,7 @@ impl<C: ConfigStore + 'static> ControlPlane<C> {
         let ws_future = async {
             info!("Web server listening on {}", web_server_addr);
             
-            WebServer::new()
+            WebServer::new(Arc::clone(&self.data_plane))
                 .start(web_server_addr)
                 .await
                 .map_err(Into::<Box<dyn std::error::Error>>::into)
