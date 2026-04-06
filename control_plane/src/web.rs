@@ -53,35 +53,58 @@ impl WebServer {
     async fn handle_socket(mut socket: WebSocket, peer: SocketAddr, data_plane: Arc<DataPlane>) {
         debug!("Client connected {:}", peer);
 
-        while let Some(result) = socket.recv().await {
-            let msg = match result {
-                Ok(msg) => msg,
-                Err(e) => {
-                    error!("Error receiving message: {}", e);
-                    break; // Break the loop if the connection drops or errors out
-                }
-            };
+        // TODO: Replace this interval with a channel receiver from your DataPlane
+        // e.g., `let mut event_rx = data_plane.subscribe_events();`
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
+        let mut is_subscribed = false;
 
-            match msg {
-                Message::Text(text) => {
-                    trace!("Received text from client: {}", text);
-                    
-                    match serde_json::from_str::<ws_api::SubscribeStreamsRequest>(&text) {
-                        Ok(request) => {
-                            debug!("Handling {:?}", request);                            
-                            Self::handle_subscribe_streams_req(&mut socket, request, &data_plane).await;
+        loop {
+            tokio::select! {
+                // 1. Handle incoming messages from the client
+                result = socket.recv() => {
+                    let msg = match result {
+                        Some(Ok(msg)) => msg,
+                        Some(Err(e)) => {
+                            error!("Error receiving message: {}", e);
+                            break; // Break the loop if the connection drops or errors out
                         }
-                        Err(e) => {
-                            eprintln!("Failed to deserialize JSON to SubscribeStreamsRequest: {}", e);
+                        None => break, // Client disconnected
+                    };
+
+                    match msg {
+                        Message::Text(text) => {
+                            trace!("Received text from client: {}", text);
+                            
+                            match serde_json::from_str::<ws_api::SubscribeStreamsRequest>(&text) {
+                                Ok(request) => {
+                                    debug!("Handling {:?}", request);                            
+                                    Self::handle_subscribe_streams_req(&mut socket, request, &data_plane).await;
+                                    is_subscribed = true;
+                                }
+                                Err(e) => {
+                                    eprintln!("Failed to deserialize JSON to SubscribeStreamsRequest: {}", e);
+                                }
+                            }
+                        }
+                        Message::Close(_) => {
+                            debug!("Client initiated a clean disconnect {:?}", socket);
+                            break;
+                        }
+                        _ => {
+                            trace!("Received non-text message type");
                         }
                     }
                 }
-                Message::Close(_) => {
-                    debug!("Client initiated a clean disconnect {:?}", socket);
-                    break;
-                }
-                _ => {
-                    trace!("Received non-text message type");
+                
+                // 2. Handle outgoing event updates from the DataPlane
+                _ = ticker.tick(), if is_subscribed => {
+                    // TODO: Await actual events from `event_rx.recv().await` instead of `ticker.tick()`
+                    let update = ws_api::SubscribeStreamsReply {
+                        status: 1,
+                        message: "Periodic stream update from DataPlane".to_string(),
+                    };
+                    
+                    Self::send_json_reply(&mut socket, update).await;
                 }
             }
         }

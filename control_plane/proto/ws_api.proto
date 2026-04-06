@@ -2,12 +2,30 @@ syntax = "proto3";
 
 package ws_api;
 
+message WsRx {
+    oneof payload {
+        SubscribeStreamsRequest subscribe_request = 1;
+    }
+}
+
 message SubscribeStreamsRequest {
+}
+
+message WsTx {
+    oneof payload {
+        SubscribeStreamsReply subscribe_reply = 1;
+    }
 }
 
 message SubscribeStreamsReply {
     uint32 status = 1;
     string message = 2;
+}
+
+message StreamProvisionedEvent {
+    string id = 1;
+    uint32 source_port = 2;
+    uint32 sink_port = 3;
 }
 
 /*
