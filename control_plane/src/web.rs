@@ -24,8 +24,9 @@ impl WebServer {
     }
 
     pub async fn start(&self, addr: SocketAddr) -> tokio::io::Result<()> {
+        let mgmt_service = ServeDir::new("assets");
         let app = Router::new()
-            .route_service("/", ServeDir::new("assets"))
+            .nest_service("/mgmt", mgmt_service)
             .route("/ws", get(Self::ws_handler));
 
         let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -39,7 +40,7 @@ impl WebServer {
     }
 
     async fn handle_socket(mut socket: WebSocket) {
-        debug!("WS client connected!");
+        debug!("Client connected");
 
         while let Some(result) = socket.recv().await {
             let msg = match result {
@@ -55,11 +56,11 @@ impl WebServer {
                     Self::handle_text_msg(&mut socket, text).await;
                 }
                 Message::Close(_) => {
-                    debug!("Client initiated a clean disconnect.");
+                    debug!("Client initiated a clean disconnect {:?}", socket);
                     break;
                 }
                 _ => {
-                    trace!("Received non-text message type.");
+                    trace!("Received non-text message type");
                 }
             }
         }
@@ -68,20 +69,17 @@ impl WebServer {
     async fn handle_text_msg(socket: &mut WebSocket, text: axum::extract::ws::Utf8Bytes) {
         trace!("Received text from client: {}", text);
 
-        // 1. Create the Protobuf message instance
         let reply = ws_api::SubscribeStreamsReply {
             status: 0,
             message: "Succees".to_string()
         };
 
-        // 2. Serialize the Protobuf struct to a JSON string
         match serde_json::to_string(&reply) {
             Ok(reply_json_string) => {
                 trace!("Sending JSON: {}", reply_json_string);
 
-                // 3. Send the JSON string over the WebSocket
                 if socket.send(Message::Text(reply_json_string.into())).await.is_err() {
-                    debug!("Client disconnected.");
+                    debug!("Client disconnected");
                 }
             }
             Err(e) => {

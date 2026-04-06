@@ -89,7 +89,7 @@ impl DataPlane {
     }
     
     pub fn start(&self) -> Result<(), Box<dyn std::error::Error>> { 
-        info!("Starting data plane.");
+        info!("Starting data plane");
   
         self.data_rx.start();
         self.data_tx.start();

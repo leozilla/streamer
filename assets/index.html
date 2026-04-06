@@ -53,9 +53,8 @@
             const SubscribeStreamsReply = root.lookupType("ws_api.SubscribeStreamsReply");
 
             // Connect to the WebSocket (Update the port 8080 if your server runs elsewhere)
-            const wsUrl = `ws://${window.location.hostname || 'localhost'}:8080/ws`;
+            const wsUrl = `ws://${window.location.hostname || 'localhost'}:3000/ws`;
             const ws = new WebSocket(wsUrl);
-            ws.binaryType = 'arraybuffer'; // Crucial for receiving binary protobuf payloads
 
             ws.onopen = () => {
                 statusEl.textContent = 'Connected';
@@ -64,20 +63,19 @@
 
                 // Create and encode the SubscribeStreamsRequest message
                 const message = SubscribeStreamsRequest.create({});
-                const buffer = SubscribeStreamsRequest.encode(message).finish();
+                const jsonPayload = JSON.stringify(message);
 
-                ws.send(buffer);
-                log('Sent SubscribeStreamsRequest');
+                ws.send(jsonPayload);
+                log('Sent SubscribeStreamsRequest as JSON');
             };
 
             ws.onmessage = (event) => {
                 try {
-                    // Decode incoming binary data into a SubscribeStreamsReply object
-                    const buffer = new Uint8Array(event.data);
-                    const reply = SubscribeStreamsReply.decode(buffer);
+                    // Parse incoming JSON data
+                    const reply = JSON.parse(event.data);
                     log(`Received SubscribeStreamsReply: ${JSON.stringify(reply)}`);
                 } catch (e) {
-                    log(`Failed to decode incoming message: ${e.message}`);
+                    log(`Failed to parse incoming JSON: ${e.message}`);
                 }
             };
 

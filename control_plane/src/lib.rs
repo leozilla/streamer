@@ -36,7 +36,7 @@ impl<C: ConfigStore + 'static> ControlPlane<C> {
             .register_encoded_file_descriptor_set(include_bytes!(concat!(env!("OUT_DIR"), "/api_descriptor.bin")))
             .build_v1()?;
  
-        info!("Starting control plane.");
+        info!("Starting control plane");
  
         let grpc_future = async {
             info!("gRPC server listening on {}", grpc_server_addr);
