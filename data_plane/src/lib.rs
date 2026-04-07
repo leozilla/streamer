@@ -27,7 +27,8 @@ pub struct DataPlane {
 
 struct StreamRegistry {
     id_counter: AtomicU32,
-    streams: DashMap<Port, Vec<StreamDescription>>,
+    streams_by_source_port: DashMap<Port, Vec<Arc<StreamDescription>>>,
+    streams_by_id: DashMap<String, Arc<StreamDescription>>,
 }
 
 struct ConnectionManager {
@@ -77,16 +78,8 @@ pub enum DataPlaneEvent {
         source_port: u16,
         sink_port: u16,
     },
-    StreamRxActive {
+    StreamDeprovisioned {
         id: String,
-        port: u16,
-    },
-    StreamProcessingActive {
-        id: String
-    },
-    StreamTxActive {
-        id: String,
-        port: u16,
     },
 }
 
@@ -103,7 +96,7 @@ impl DataPlane {
         let data_rx = DataRx::new(con_rx, proc_tx, event_tx.clone());
         let data_tx = DataTx::new(Arc::clone(&stream_registry), Arc::clone(&connection_manager), sink_rx, event_tx.clone());
 
-        Self { 
+        Self {
             stream_registry,
             connection_manager,
             processor,
@@ -132,10 +125,10 @@ impl DataPlane {
     }
 
     pub async fn provision_stream(&self, source: Port, sink: Port) -> io::Result<StreamDescription> {
-        info!("Provisioning stream {} -> {}", source, sink);
+        debug!("Provisioning stream {} -> {}", source, sink);
         
         if let Some(stream) = self.stream_registry.find_stream(source, sink) {
-            info!("Stream with id {} already provisioned {} -> {}", stream.id, source, sink);
+            info!("Stream already provisioned, Id {}, {} -> {}", stream.id, source, sink);
             return Ok(stream);
         }
 
@@ -148,6 +141,25 @@ impl DataPlane {
         self.notify_stream_provisioned(&stream);
         
         Ok(stream)
+    }
+
+    pub async fn deprovision_stream(&self, id: &str) -> Option<StreamDescription> {
+         debug!("Deprovisioning stream with Id {}", id);
+
+        if let Some(stream) = self.stream_registry.remove_stream(id) {
+            
+            if let None = self.stream_registry.find_stream(stream.source, stream.sink) {
+                let _ = self.connection_manager.disconnect_source(stream.source).await;
+                let _ = self.connection_manager.disconnect_sink(stream.sink).await;
+
+                info!("Stream deprovisioned, Id {}, {} -> {}", stream.id, stream.source, stream.sink);
+            }
+
+            Some(stream)
+        } else {
+            debug!("Stream with id {} not found", id);
+            None
+        }
     }
         
     fn notify_stream_provisioned(&self, stream: &StreamDescription) {
@@ -171,44 +183,54 @@ impl StreamRegistry {
     fn new() -> Self {
         Self { 
             id_counter: AtomicU32::new(1),
-            streams: DashMap::new(),
+            streams_by_source_port: DashMap::new(),
+            streams_by_id: DashMap::new(),
         }
     }
 
     fn add_stream(&self, source: Port, sink: Port) -> StreamDescription {
-        let stream = StreamDescription {
+        let stream = Arc::new(StreamDescription {
             id: self.id_counter.fetch_add(1, Ordering::SeqCst).to_string(),
             source,
             sink,
-        };
+        });
 
-        self.streams.entry(source).or_default().push(stream.clone());
+        self.streams_by_source_port.entry(source).or_default().push(Arc::clone(&stream));
+        self.streams_by_id.insert(stream.id.clone(), Arc::clone(&stream));
 
-        stream
+        (*stream).clone()
+    }
+
+    fn remove_stream(&self, id: &str) -> Option<StreamDescription> {
+        if let Some((_, stream)) = self.streams_by_id.remove(id) {
+            if let Some(mut vec_ref) = self.streams_by_source_port.get_mut(&stream.source) {
+                vec_ref.retain(|s| s.id != id);
+            }
+            Some((*stream).clone())
+        } else {
+            None
+        }
     }
 
     fn list_streams(&self) -> Vec<StreamDescription> {
-        let streams: Vec<StreamDescription> = self.streams
+        self.streams_by_id
             .iter()
-            .map(|entry| entry.value().clone())
-            .flatten()
-            .collect();
-
-        streams
+            .map(|entry| (**entry.value()).clone())
+            .collect()
     }
 
     fn find_stream(&self, source: Port, sink: Port) -> Option<StreamDescription> {
-        self.streams.get(&source)
-            .and_then(|r| r.value().iter().find(|s| s.sink == sink).cloned())
+        self.streams_by_source_port.get(&source)
+            .and_then(|r| r.value().iter().find(|s| s.sink == sink).map(|s| (**s).clone()))
     }
 
     fn for_each_stream_by_source<F>(&self, source: Port, mut f: F)
     where
         F: FnMut(&StreamDescription),
     {
-        if let Some(r) = self.streams.get(&source) {
+        if let Some(r) = self.streams_by_source_port.get(&source) {
             for stream in r.value() {
-                f(stream);
+                f(&**stream);
             }
         }
     }
@@ -283,6 +305,16 @@ impl ConnectionManager {
                 Arc::new(Mutex::new(sink_socket))
             });
         }
+        Ok(())
+    }
+
+    async fn disconnect_source(&self, source: Port) -> io::Result<()> {
+        self.listeners.lock().await.remove(&source);
+        Ok(())
+    }
+
+    async fn disconnect_sink(&self, sink: Port) -> io::Result<()> {
+        self.sockets.remove(&sink);
         Ok(())
     }
 }

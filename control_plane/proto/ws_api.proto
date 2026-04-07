@@ -15,6 +15,7 @@ message WsTx {
     oneof payload {
         SubscribeStreamsReply subscribe_reply = 1;
         StreamProvisionedEvent stream_provisioned_event = 2;
+        StreamDeprovisionedEvent stream_deprovisioned_event = 3;
     }
 }
 
@@ -27,6 +28,10 @@ message StreamProvisionedEvent {
     string id = 1;
     uint32 source_port = 2;
     uint32 sink_port = 3;
+}
+
+message StreamDeprovisionedEvent {
+    string id = 1;
 }
 
 /*
