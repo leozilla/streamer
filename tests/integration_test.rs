@@ -26,21 +26,24 @@ async fn test_list_streams_integration() {
     common::start_server().await;
     let mut client = common::connect_grpc_client().await;
 
-    let request = tonic::Request::new(ListProvisionedStreamsRequest {
-    });
-    let response = client.list_provisioned_streams(request).await.unwrap();
+    let list_reply = common::list_provisioned_streams(&mut client).await;
+    assert_eq!(list_reply.streams.len(), 0);
 
-    assert_eq!(response.into_inner().streams.len(), 0);
+    let provision1_reply = common::api_provision_stream(&mut client, 32000, 32001).await;
+    let list_reply = common::list_provisioned_streams(&mut client).await;
+    assert_eq!(list_reply.streams.len(), 1);
 
-    let _ = common::api_provision_stream(&mut client, 32000, 32001).await;
+    let provision2_reply = common::api_provision_stream(&mut client, 32000, 32002).await;
+    let list_reply = common::list_provisioned_streams(&mut client).await;
+    assert_eq!(list_reply.streams.len(), 2);
 
-    let request = tonic::Request::new(ListProvisionedStreamsRequest {
-    });
-    let response = client.list_provisioned_streams(request).await.unwrap();
+    common::api_deprovision_stream(&mut client, provision1_reply.stream.unwrap().id.as_str()).await;
+    let list_reply = common::list_provisioned_streams(&mut client).await;
+    assert_eq!(list_reply.streams.len(), 1);
 
-    assert_eq!(response.into_inner().streams.len(), 1);
-
-    let _ = common::api_provision_stream(&mut client, 32000, 32002).await;
+    common::api_deprovision_stream(&mut client, provision2_reply.stream.unwrap().id.as_str()).await;
+    let list_reply = common::list_provisioned_streams(&mut client).await;
+    assert_eq!(list_reply.streams.len(), 0);
 }
 
 #[tokio::test]

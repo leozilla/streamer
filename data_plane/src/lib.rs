@@ -405,8 +405,7 @@ impl DataRx {
                     }
                 }
                 Err(_) => {
-                    info!("Stream timed out on source {}", job.source);
-                    break;
+                    trace!("Stream timed out on source {}", job.source);
                 }
                 _ => break,
             }

@@ -17,7 +17,7 @@ pub async fn connect_grpc_client() -> StreamerClient<tonic::transport::Channel> 
     client
 }
 
-pub async fn api_provision_stream(client: &mut StreamerClient<tonic::transport::Channel>, source: u16, sink: u16) -> ProvisionStreamReply{
+pub async fn api_provision_stream(client: &mut StreamerClient<tonic::transport::Channel>, source: u16, sink: u16) -> ProvisionStreamReply {
     let request = tonic::Request::new(ProvisionStreamRequest {
         source_port: u32::from(source),
         sink_port: u32::from(sink),
@@ -30,13 +30,19 @@ pub async fn api_provision_stream(client: &mut StreamerClient<tonic::transport::
     reply
 }
 
+pub async fn list_provisioned_streams(client: &mut StreamerClient<tonic::transport::Channel>) -> ListProvisionedStreamsReply {
+    let request = tonic::Request::new(ListProvisionedStreamsRequest {
+    });
+    let response = client.list_provisioned_streams(request).await.unwrap();
+
+    response.into_inner()
+}
+
 pub async fn api_deprovision_stream(client: &mut StreamerClient<tonic::transport::Channel>, id: &str) {
     let request = tonic::Request::new(DeprovisionStreamRequest {
-        id: id.into(),
+        stream_id: id.into(),
     });
-    let response = client.deprovision_stream(request).await.unwrap();
-
-    assert_eq!(response.into_inner().stream.is_some(), true);
+    let _response = client.deprovision_stream(request).await.unwrap();
 }
 
 pub async fn connect_tcp(port: u16) -> io::Result<TcpStream> {
