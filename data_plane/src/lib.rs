@@ -42,7 +42,6 @@ struct DataRx {
     con_rx: Arc<Mutex<mpsc::Receiver<SourceRxTask>>>,
     proc_tx: mpsc::Sender<ProcessingJob>,
     event_tx: broadcast::Sender<DataPlaneEvent>,
-    rx_timeout: Duration,
 }
 
 struct DataTx {
@@ -323,7 +322,7 @@ impl ConnectionManager {
                     socket: socket_arc,
                     abort_rx,
                 };
-                trace!("Submitting {:?}", job);
+                trace!("Submitting SourceRxTask, source: {}", job.source);
                 let _ = con_tx.send(job).await;
             }
         }).await
@@ -360,45 +359,43 @@ impl DataRx {
         Self { 
             con_rx: Arc::new(Mutex::new(con_rx)),            
             proc_tx,
-            event_tx,
-            rx_timeout: Duration::from_secs(10)
+            event_tx
         }
     }
 
     fn start(&self) { 
         let con_rx = Arc::clone(&self.con_rx);
         let proc_tx = self.proc_tx.clone();
-        let rx_timeout = self.rx_timeout;
 
         // spawn a Tokio task to handle incoming connection jobs (I/O bound)
         tokio::spawn(async move {
             let mut con_rx = con_rx.lock().await;
 
             while let Some(job) = con_rx.recv().await {
-                trace!("Received {:?}", job);
+                trace!("Received SourceRxTask, source: {}", job.source);
 
                 let proc_tx = proc_tx.clone();
 
-                tokio::spawn(Self::process_udp_socket(job, proc_tx, rx_timeout));
+                tokio::spawn(Self::process_udp_socket(job, proc_tx));
             }
         });
     }
 
-    async fn process_udp_socket(mut job: SourceRxTask, proc_tx: mpsc::Sender<ProcessingJob>, rx_timeout: Duration) {
+    async fn process_udp_socket(mut rx_task: SourceRxTask, proc_tx: mpsc::Sender<ProcessingJob>) {
         let mut buf = bytes::BytesMut::with_capacity(512);
 
-        let socket = job.socket.lock().await;
+        let socket = rx_task.socket.lock().await;
         loop {
             buf.reserve(512); // Ensure enough contiguous capacity for the next UDP packet
             tokio::select! {
-                _ = &mut job.abort_rx => {
-                    debug!("Source socket {} disconnected, aborting rx task", job.source);
+                _ = &mut rx_task.abort_rx => {
+                    debug!("Source socket {} disconnected, aborting rx task", rx_task.source);
                     break;
                 }
-                res = timeout(rx_timeout, socket.recv_buf_from(&mut buf)) => {
+                res = socket.recv_buf_from(&mut buf) => {
                     match res {
-                        Ok(Ok((n, addr))) if n > 0 => {
-                            trace!("Received data on source {} from {:?}, bytes={}", job.source, addr, n);
+                        Ok((n, addr)) if n > 0 => {
+                            trace!("Received data on source {} from {:?}, bytes={}", rx_task.source, addr, n);
                             
                             let data = buf.split().freeze();
                             let mut data_reader = data.clone();
@@ -406,28 +403,32 @@ impl DataRx {
                             match Packet::unmarshal(&mut data_reader) {
                                 Ok(rtp_packet) => {
                                     let seq = rtp_packet.header.sequence_number;
-                                    debug!("Received RTP packet on source {}, seq={}, bytes={}", job.source, seq, n);
+                                    debug!("Received RTP packet on source {}, seq={}, bytes={}", rx_task.source, seq, n);
                                     
-                                    let job = ProcessingJob {
+                                    let proc_job = ProcessingJob {
                                         data, // Forward the entire raw packet so sinks get a valid RTP stream
                                         sequence_number: seq,
                                         n,
-                                        source: job.source
+                                        source: rx_task.source
                                     };
-                                    trace!("Submitting ProcessingJob source {}, seq={}, bytes={}", job.source, seq, n);
-                                    proc_tx.send(job).await.unwrap();
+                                    trace!("Submitting ProcessingJob source {}, seq={}, bytes={}", rx_task.source, seq, n);
+                                    proc_tx.send(proc_job).await.unwrap();
                                 }
                                 Err(err) => {
                                     error!("Failed to parse RTP packet: {}", err);
                                 }
                             }
                         }
-                        Err(_) => {
-                            trace!("Stream timed out on source {}", job.source);
+                        Ok((_, _)) => {
+                            trace!("UDP socket read returned 0 bytes");
+                            continue;
                         }
-                        _ => break,
+                        Err(err) => {
+                            error!("Failed to read UDP socket: {}", err);
+                            break;
+                        }
                     }
-                }
+                }    
             }
         }
     }

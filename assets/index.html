@@ -45,6 +45,13 @@
             li.textContent = `ID: ${stream.id} | Source: ${stream.source_port} -> Sink: ${stream.sink_port}`;
         }
 
+        function removeStreamFromList(stream) {
+            let li = document.getElementById(`stream-${stream.id}`);
+            if (li) {
+                li.remove();
+            }
+        }
+
         // Define the proto schema directly in the client
         const protoDefinition = `
             syntax = "proto3";
@@ -110,9 +117,13 @@
                     if (msg.payload && msg.payload.SubscribeReply) {
                         log(`Received SubscribeReply: ${JSON.stringify(msg.payload.SubscribeReply)}`);
                     } else if (msg.payload && msg.payload.StreamProvisionedEvent) {
-                    const event = msg.payload.StreamProvisionedEvent;
-                    log(`Received StreamProvisionedEvent: ${JSON.stringify(event)}`);
-                    addStreamToList(event);
+                        const event = msg.payload.StreamProvisionedEvent;
+                        log(`Received StreamProvisionedEvent: ${JSON.stringify(event)}`);
+                        addStreamToList(event);
+                    } else if (msg.payload && msg.payload.StreamDeprovisionedEvent) {
+                        const event = msg.payload.StreamDeprovisionedEvent;
+                        log(`Received StreamDeprovisionedEvent: ${JSON.stringify(event)}`);
+                        removeStreamFromList(event);
                     } else {
                         log(`Received unknown message: ${JSON.stringify(msg)}`);
                     }
