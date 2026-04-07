@@ -107,4 +107,22 @@ impl<C: ConfigStore + 'static> Streamer for StreamerImpl<C> {
 
         result
     }
+
+    async fn deprovision_stream(
+        &self,
+        request: Request<DeprovisionStreamRequest>,
+    ) -> Result<Response<DeprovisionStreamReply>, Status> {
+        let result = match self.data_plane.deprovision_stream(&request.into_inner().stream_id).await {
+             Some(_) => {
+                let reply = DeprovisionStreamReply {
+                };
+                Ok(Response::new(reply))
+            },
+            None => {
+                Err(Status::not_found("Stream not found"))
+            },
+        };
+
+        result
+    }
 }

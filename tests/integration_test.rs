@@ -20,8 +20,8 @@ async fn test_get_config_integration() {
     assert_eq!(response.into_inner().total_supported_streams, 100);
 }
 
+// cargo test test_list_streams_integration
 #[tokio::test]
-#[ignore]
 async fn test_list_streams_integration() {
     common::start_server().await;
     let mut client = common::connect_grpc_client().await;
@@ -32,20 +32,15 @@ async fn test_list_streams_integration() {
 
     assert_eq!(response.into_inner().streams.len(), 0);
 
-    let request = tonic::Request::new(ProvisionStreamRequest {
-        source_port: 32000,
-        sink_port: 32001,
-        description: "My awesome stream".into(),
-    });
-    let response = client.provision_stream(request).await.unwrap();
-
-    assert_eq!(response.into_inner().stream.is_some(), true);
+    let _ = common::api_provision_stream(&mut client, 32000, 32001).await;
 
     let request = tonic::Request::new(ListProvisionedStreamsRequest {
     });
     let response = client.list_provisioned_streams(request).await.unwrap();
 
     assert_eq!(response.into_inner().streams.len(), 1);
+
+    let _ = common::api_provision_stream(&mut client, 32000, 32002).await;
 }
 
 #[tokio::test]

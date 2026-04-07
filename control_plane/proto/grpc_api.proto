@@ -9,7 +9,7 @@ service Streamer {
     rpc ListProvisionedStreams (ListProvisionedStreamsRequest) returns (ListProvisionedStreamsReply) {}
     
     rpc ProvisionStream (ProvisionStreamRequest) returns (ProvisionStreamReply) {}
-
+    rpc DeprovisionStream (DeprovisionStreamRequest) returns (DeprovisionStreamReply) {}
 }
 
 message GetConfigRequest {
@@ -41,6 +41,13 @@ message ProvisionStreamRequest {
 
 message ProvisionStreamReply {
     FullStreamDescription stream = 1;
+}
+
+message DeprovisionStreamRequest {
+    string stream_id = 3;
+}
+
+message DeprovisionStreamReply {
 }
 
 message ShortStreamDescription {

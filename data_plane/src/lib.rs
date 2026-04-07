@@ -148,12 +148,15 @@ impl DataPlane {
 
         if let Some(stream) = self.stream_registry.remove_stream(id) {
             
-            if let None = self.stream_registry.find_stream(stream.source, stream.sink) {
+            if !self.stream_registry.has_source(stream.source) {
                 let _ = self.connection_manager.disconnect_source(stream.source).await;
-                let _ = self.connection_manager.disconnect_sink(stream.sink).await;
-
-                info!("Stream deprovisioned, Id {}, {} -> {}", stream.id, stream.source, stream.sink);
             }
+            if !self.stream_registry.has_sink(stream.sink) {
+                let _ = self.connection_manager.disconnect_sink(stream.sink).await;
+            }
+
+            info!("Stream deprovisioned, Id {}, {} -> {}", stream.id, stream.source, stream.sink);
+            self.notify_stream_deprovisioned(&stream);
 
             Some(stream)
         } else {
@@ -167,6 +170,13 @@ impl DataPlane {
             id: stream.id.clone(), 
             source_port: stream.source, 
             sink_port: stream.sink
+        };
+        let _ = self.event_tx.send(event);
+    }
+
+    fn notify_stream_deprovisioned(&self, stream: &StreamDescription) {
+        let event = DataPlaneEvent::StreamDeprovisioned { 
+            id: stream.id.clone(),
         };
         let _ = self.event_tx.send(event);
     }
@@ -203,8 +213,13 @@ impl StreamRegistry {
 
     fn remove_stream(&self, id: &str) -> Option<StreamDescription> {
         if let Some((_, stream)) = self.streams_by_id.remove(id) {
+            let mut is_empty = false;
             if let Some(mut vec_ref) = self.streams_by_source_port.get_mut(&stream.source) {
                 vec_ref.retain(|s| s.id != id);
+                is_empty = vec_ref.is_empty();
+            }
+            if is_empty {
+                self.streams_by_source_port.remove(&stream.source);
             }
             Some((*stream).clone())
         } else {
@@ -233,6 +248,14 @@ impl StreamRegistry {
                 f(&**stream);
             }
         }
+    }
+
+    fn has_source(&self, source: Port) -> bool {
+        self.streams_by_source_port.contains_key(&source)
+    }
+
+    fn has_sink(&self, sink: Port) -> bool {
+        self.streams_by_id.iter().any(|entry| entry.value().sink == sink)
     }
 }
 
@@ -310,6 +333,7 @@ impl ConnectionManager {
 
     async fn disconnect_source(&self, source: Port) -> io::Result<()> {
         self.listeners.lock().await.remove(&source);
+        self.sockets.remove(&source);
         Ok(())
     }
 

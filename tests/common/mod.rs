@@ -17,13 +17,24 @@ pub async fn connect_grpc_client() -> StreamerClient<tonic::transport::Channel> 
     client
 }
 
-pub async fn api_provision_stream(client: &mut StreamerClient<tonic::transport::Channel>, source: u16, sink: u16) {
+pub async fn api_provision_stream(client: &mut StreamerClient<tonic::transport::Channel>, source: u16, sink: u16) -> ProvisionStreamReply{
     let request = tonic::Request::new(ProvisionStreamRequest {
         source_port: u32::from(source),
         sink_port: u32::from(sink),
         description: "My awesome stream".into(),
     });
     let response = client.provision_stream(request).await.unwrap();
+
+    let reply = response.into_inner();
+    assert_eq!(reply.stream.is_some(), true);
+    reply
+}
+
+pub async fn api_deprovision_stream(client: &mut StreamerClient<tonic::transport::Channel>, id: &str) {
+    let request = tonic::Request::new(DeprovisionStreamRequest {
+        id: id.into(),
+    });
+    let response = client.deprovision_stream(request).await.unwrap();
 
     assert_eq!(response.into_inner().stream.is_some(), true);
 }
