@@ -4,11 +4,16 @@ use rtp::packet::Packet;
 use webrtc_util::marshal::Unmarshal;
 use tokio::sync::{mpsc, Mutex};
 use tokio::sync::broadcast;
-use tracing::{debug, trace, error};
+use tracing::{debug, trace, warn, error};
 
 use crate::ProcessingJob;
 use crate::SourceRxTask;
 use crate::DataPlaneEvent;
+
+struct RxMetrics {
+    dropped_zero_byte: metrics::Counter,
+    dropped_io_error: metrics::Counter,
+}
 
 pub struct DataRx {
     con_rx: Arc<Mutex<mpsc::Receiver<SourceRxTask>>>,
@@ -46,6 +51,7 @@ impl DataRx {
     async fn process_udp_socket(mut rx_task: SourceRxTask, proc_tx: mpsc::Sender<ProcessingJob>) {
         let mut buf = bytes::BytesMut::with_capacity(512);
 
+        let metrics = RxMetrics::new(rx_task.source);
         let socket = rx_task.socket.lock().await;
         loop {
             buf.reserve(512); // Ensure enough contiguous capacity for the next UDP packet
@@ -82,16 +88,36 @@ impl DataRx {
                             }
                         }
                         Ok((_, _)) => {
-                            trace!("UDP socket read returned 0 bytes");
+                            warn!("Received zero-byte packet on source {}", rx_task.source);
+                            metrics.dropped_zero_byte.increment(1);
                             continue;
                         }
                         Err(err) => {
-                            error!("Failed to read UDP socket: {}", err);
+                            error!("Socket read error on source {}: {}", rx_task.source, err);
+                            metrics.dropped_io_error.increment(1);
                             break;
                         }
                     }
                 }    
             }
+        }
+    }
+}
+
+impl RxMetrics {
+    fn new(source_port: crate::Port) -> Self {
+        let port_str = source_port.to_string();
+        Self {
+            dropped_zero_byte: metrics::counter!(
+                "streamer_rx_dropped_packets_total", 
+                "reason" => "zero_byte",
+                "source_port" => port_str.clone()
+            ),
+            dropped_io_error: metrics::counter!(
+                "streamer_rx_dropped_packets_total", 
+                "reason" => "io_error",
+                "source_port" => port_str
+            ),
         }
     }
 }

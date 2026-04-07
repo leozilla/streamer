@@ -140,6 +140,23 @@ async fn test_pipeline_throughput() {
 
     let start_time = std::time::Instant::now();
 
+    // 2. Receive the data to measure end-to-end throughput
+    let mut buf = [0u8; 2048];
+    let mut received_bytes = 0;
+    let mut received_packets = 0;
+
+    tokio::spawn(async move {
+        while received_packets < num_packets {
+            match tokio::time::timeout(tokio::time::Duration::from_millis(500), rx_socket.recv_from(&mut buf)).await {
+                Ok(Ok((n, _))) => {
+                    received_bytes += n;
+                    received_packets += 1;
+                }
+                _ => break, // Timeout means the pipeline drained or dropped packets
+            }
+        }
+    });
+
     // 1. Spawn a task to rapidly pump data into the streamer
     let sender = std::sync::Arc::clone(&tx_socket);
     tokio::spawn(async move {
@@ -147,21 +164,6 @@ async fn test_pipeline_throughput() {
             let _ = sender.send_to(&payload, &target_addr).await;
         }
     });
-
-    // 2. Receive the data to measure end-to-end throughput
-    let mut buf = [0u8; 2048];
-    let mut received_bytes = 0;
-    let mut received_packets = 0;
-
-    while received_packets < num_packets {
-        match tokio::time::timeout(tokio::time::Duration::from_millis(500), rx_socket.recv_from(&mut buf)).await {
-            Ok(Ok((n, _))) => {
-                received_bytes += n;
-                received_packets += 1;
-            }
-            _ => break, // Timeout means the pipeline drained or dropped packets
-        }
-    }
 
     let elapsed = start_time.elapsed();
     let mbps = (received_bytes as f64 / 1_024_000.0) / elapsed.as_secs_f64();
