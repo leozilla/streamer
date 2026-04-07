@@ -17,18 +17,32 @@
     <h1>Streamer Management Console</h1>
     <p>WebSocket Status: <span id="status" class="status-disconnected">Disconnected</span></p>
     
+    <h2>Provisioned Streams</h2>
+    <ul id="streams-list"></ul>
+
     <h2>Activity Log</h2>
     <div id="log"></div>
 
     <script>
         const logEl = document.getElementById('log');
         const statusEl = document.getElementById('status');
+        const streamsListEl = document.getElementById('streams-list');
         
         function log(message) {
             const el = document.createElement('div');
             el.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
             logEl.appendChild(el);
             logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        function addStreamToList(stream) {
+            let li = document.getElementById(`stream-${stream.id}`);
+            if (!li) {
+                li = document.createElement('li');
+                li.id = `stream-${stream.id}`;
+                streamsListEl.appendChild(li);
+            }
+            li.textContent = `ID: ${stream.id} | Source: ${stream.source_port} -> Sink: ${stream.sink_port}`;
         }
 
         // Define the proto schema directly in the client
@@ -96,7 +110,9 @@
                     if (msg.payload && msg.payload.SubscribeReply) {
                         log(`Received SubscribeReply: ${JSON.stringify(msg.payload.SubscribeReply)}`);
                     } else if (msg.payload && msg.payload.StreamProvisionedEvent) {
-                        log(`Received StreamProvisionedEvent: ${JSON.stringify(msg.payload.StreamProvisionedEvent)}`);
+                    const event = msg.payload.StreamProvisionedEvent;
+                    log(`Received StreamProvisionedEvent: ${JSON.stringify(event)}`);
+                    addStreamToList(event);
                     } else {
                         log(`Received unknown message: ${JSON.stringify(msg)}`);
                     }

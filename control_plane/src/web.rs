@@ -109,7 +109,7 @@ impl WebServer {
         }
     }
 
-    async fn handle_subscribe_streams_req(socket: &mut WebSocket, _request: ws_api::SubscribeStreamsRequest, _data_plane: &DataPlane) {
+    async fn handle_subscribe_streams_req(socket: &mut WebSocket, _request: ws_api::SubscribeStreamsRequest, data_plane: &DataPlane) {
         let reply = ws_api::SubscribeStreamsReply {
             status: 0,
             message: "Succees".to_string()
@@ -119,6 +119,18 @@ impl WebServer {
             payload: Some(ws_api::ws_tx::Payload::SubscribeReply(reply))
         };
         Self::send_json(socket, tx).await;
+
+        for stream in data_plane.list_provisioned_streams() {
+            let evt = ws_api::StreamProvisionedEvent {
+                id: stream.id,
+                source_port: u32::from(stream.source),
+                sink_port: u32::from(stream.sink),
+            };
+            let tx = ws_api::WsTx {
+                payload: Some(ws_api::ws_tx::Payload::StreamProvisionedEvent(evt))
+            };
+            Self::send_json(socket, tx).await;
+        }
     }
 
     async fn handle_evt(socket: &mut WebSocket, data_event: data_plane::DataPlaneEvent) {
