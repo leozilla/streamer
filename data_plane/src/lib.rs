@@ -1,4 +1,6 @@
 mod processor;
+mod rx;
+mod tx;
 
 use std::io;
 use std::collections::HashMap;
@@ -7,12 +9,11 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use tracing::{info, debug, trace, error};
 use dashmap::DashMap;
-use tokio::{net::UdpSocket, sync::{OnceCell, mpsc, Mutex, broadcast}, time::{timeout, Duration}};
-
-use rtp::packet::Packet;
-use webrtc_util::marshal::Unmarshal;
+use tokio::{net::UdpSocket, sync::{OnceCell, mpsc, Mutex, broadcast}};
 
 use processor::Processor;
+use rx::DataRx;
+use tx::DataTx;
 
 type Port = u16;
 
@@ -38,20 +39,7 @@ struct ConnectionManager {
     rx_abort_txs: Arc<DashMap<Port, tokio::sync::oneshot::Sender<()>>>,
 }
 
-struct DataRx {
-    con_rx: Arc<Mutex<mpsc::Receiver<SourceRxTask>>>,
-    proc_tx: mpsc::Sender<ProcessingJob>,
-    event_tx: broadcast::Sender<DataPlaneEvent>,
-}
-
-struct DataTx {
-    stream_registry: Arc<StreamRegistry>,
-    connection_manager: Arc<ConnectionManager>,
-    sink_rx: Arc<Mutex<mpsc::Receiver<SinkTxJob>>>,
-    event_tx: broadcast::Sender<DataPlaneEvent>,
-}
-
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ProcessingJob {
     data: bytes::Bytes,
     sequence_number: u16,
@@ -59,7 +47,7 @@ pub struct ProcessingJob {
     source: Port,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct SinkTxJob {
     data: bytes::Bytes,
     source: Port,
@@ -354,126 +342,3 @@ impl ConnectionManager {
     }
 }
 
-impl DataRx {
-    pub fn new(con_rx: mpsc::Receiver<SourceRxTask>, proc_tx: mpsc::Sender<ProcessingJob>, event_tx: broadcast::Sender<DataPlaneEvent>) -> Self {
-        Self { 
-            con_rx: Arc::new(Mutex::new(con_rx)),            
-            proc_tx,
-            event_tx
-        }
-    }
-
-    fn start(&self) { 
-        let con_rx = Arc::clone(&self.con_rx);
-        let proc_tx = self.proc_tx.clone();
-
-        // spawn a Tokio task to handle incoming connection jobs (I/O bound)
-        tokio::spawn(async move {
-            let mut con_rx = con_rx.lock().await;
-
-            while let Some(job) = con_rx.recv().await {
-                trace!("Received SourceRxTask, source: {}", job.source);
-
-                let proc_tx = proc_tx.clone();
-
-                tokio::spawn(Self::process_udp_socket(job, proc_tx));
-            }
-        });
-    }
-
-    async fn process_udp_socket(mut rx_task: SourceRxTask, proc_tx: mpsc::Sender<ProcessingJob>) {
-        let mut buf = bytes::BytesMut::with_capacity(512);
-
-        let socket = rx_task.socket.lock().await;
-        loop {
-            buf.reserve(512); // Ensure enough contiguous capacity for the next UDP packet
-            tokio::select! {
-                _ = &mut rx_task.abort_rx => {
-                    debug!("Source socket {} disconnected, aborting rx task", rx_task.source);
-                    break;
-                }
-                res = socket.recv_buf_from(&mut buf) => {
-                    match res {
-                        Ok((n, addr)) if n > 0 => {
-                            trace!("Received data on source {} from {:?}, bytes={}", rx_task.source, addr, n);
-                            
-                            let data = buf.split().freeze();
-                            let mut data_reader = data.clone();
-                            
-                            match Packet::unmarshal(&mut data_reader) {
-                                Ok(rtp_packet) => {
-                                    let seq = rtp_packet.header.sequence_number;
-                                    debug!("Received RTP packet on source {}, seq={}, bytes={}", rx_task.source, seq, n);
-                                    
-                                    let proc_job = ProcessingJob {
-                                        data, // Forward the entire raw packet so sinks get a valid RTP stream
-                                        sequence_number: seq,
-                                        n,
-                                        source: rx_task.source
-                                    };
-                                    trace!("Submitting ProcessingJob source {}, seq={}, bytes={}", rx_task.source, seq, n);
-                                    proc_tx.send(proc_job).await.unwrap();
-                                }
-                                Err(err) => {
-                                    error!("Failed to parse RTP packet: {}", err);
-                                }
-                            }
-                        }
-                        Ok((_, _)) => {
-                            trace!("UDP socket read returned 0 bytes");
-                            continue;
-                        }
-                        Err(err) => {
-                            error!("Failed to read UDP socket: {}", err);
-                            break;
-                        }
-                    }
-                }    
-            }
-        }
-    }
-}
-
-impl DataTx {
-    fn new(stream_registry: Arc<StreamRegistry>, connection_manager: Arc<ConnectionManager>, sink_rx: mpsc::Receiver<SinkTxJob>, event_tx: broadcast::Sender<DataPlaneEvent>) -> Self {
-        Self {
-            stream_registry,
-            connection_manager,
-            sink_rx: Arc::new(Mutex::new(sink_rx)),
-            event_tx,
-        }
-    }
-
-    fn start(&self) { 
-        let sink_rx = Arc::clone(&self.sink_rx);
-        let stream_registry = Arc::clone(&self.stream_registry);
-        let connection_manager = Arc::clone(&self.connection_manager);
-        
-        // spawn a Tokio task to send data to the sink of the stream (also I/O bound)
-        tokio::spawn(async move {
-            let mut sink_rx = sink_rx.lock().await;
-
-            while let Some(job) = sink_rx.recv().await {
-                trace!("Received SinkTxJob, source={}, bytes={}", job.source, job.data.len());
-
-                Self::write_egress_udp_socket(&stream_registry, &connection_manager, job);
-            }
-        });
-    }
-
-    fn write_egress_udp_socket(stream_registry: &StreamRegistry, connection_manager: &ConnectionManager, job: SinkTxJob) {
-        stream_registry.for_each_stream_by_source(job.source, |stream| {
-            let sink_port = stream.sink;
-            let sink_socket = connection_manager.get_connection(&sink_port).unwrap();
-            let data = job.data.clone(); // `Bytes::clone` is an extremely cheap pointer copy
-        
-            tokio::spawn(async move {
-                let sink_socket = sink_socket.lock().await;
-                let addr = format!("0.0.0.0:{}", sink_port);
-                let _ = sink_socket.send_to(&data, addr).await;
-
-                trace!("Data flushed on sink {}", sink_port);
-            });
-        });
-    }
-}
