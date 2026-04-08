@@ -167,3 +167,29 @@ async fn test_pipeline_throughput() {
 
     assert!(received_packets > 0, "Did not receive any packets");
 }
+
+#[tokio::test]
+async fn test_stream_deprovisioning_closes_sockets() {
+    common::start_server().await;
+    let mut client = common::connect_grpc_client().await;
+
+    let src_port: u16 = 34000;
+    let sink_port: u16 = 34001;
+    
+    let provision_reply = common::api_provision_stream(&mut client, src_port, sink_port).await;
+    let stream_id = provision_reply.stream.unwrap().id;
+
+    // The DataPlane should now be bound to the source port. 
+    // Trying to bind to it locally should yield an Address in Use error.
+    let bind_attempt = std::net::UdpSocket::bind(format!("0.0.0.0:{}", src_port));
+    assert!(bind_attempt.is_err(), "Expected port to be in use by Streamer, but bind succeeded");
+
+    common::api_deprovision_stream(&mut client, stream_id.as_str()).await;
+
+    // Give the DataPlane a brief moment to abort the task and release the OS port
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    // We should now be able to successfully bind to the source port because the Streamer released it
+    let bind_attempt = std::net::UdpSocket::bind(format!("0.0.0.0:{}", src_port));
+    assert!(bind_attempt.is_ok(), "Expected port to be released, but bind failed");
+}

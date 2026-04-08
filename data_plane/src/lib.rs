@@ -26,6 +26,10 @@ pub struct DataPlane {
     event_tx: broadcast::Sender<DataPlaneEvent>,
 }
 
+pub trait ObservableDataPlane {
+    fn subscribe_events(&self) -> broadcast::Receiver<DataPlaneEvent>;
+}
+
 struct StreamRegistry {
     id_counter: AtomicU32,
     streams_by_source_port: DashMap<Port, Vec<Arc<StreamDescription>>>,
@@ -70,6 +74,11 @@ pub enum DataPlaneEvent {
     StreamDeprovisioned {
         id: String,
     },
+    StreamUpdated {
+        id: String,
+        rx_active: bool,
+        tx_active: bool,
+    }
 }
 
 impl DataPlane {
@@ -83,7 +92,7 @@ impl DataPlane {
         let connection_manager = Arc::new(ConnectionManager::new(con_tx));
         let processor: Processor = Processor::new(proc_rx, sink_tx, event_tx.clone());
         let data_rx = DataRx::new(con_rx, proc_tx, event_tx.clone());
-        let data_tx = DataTx::new(Arc::clone(&stream_registry), Arc::clone(&connection_manager), sink_rx, event_tx.clone());
+        let data_tx = DataTx::new(Arc::clone(&connection_manager), sink_rx, event_tx.clone());
 
         Self {
             stream_registry,
@@ -98,8 +107,8 @@ impl DataPlane {
     pub fn start(&self) -> Result<(), Box<dyn std::error::Error>> { 
         info!("Starting data plane");
   
-        self.data_rx.start();
         self.data_tx.start();
+        self.data_rx.start();        
         self.processor.start();
 
         Ok(())
@@ -128,7 +137,8 @@ impl DataPlane {
         info!("New stream with Id {} provisioned {} -> {}", stream.id, source, sink);
 
         self.notify_stream_provisioned(&stream);
-        
+        self.data_tx.add_sink(&stream);
+
         Ok(stream)
     }
 
@@ -146,6 +156,7 @@ impl DataPlane {
 
             info!("Stream deprovisioned, Id {}, {} -> {}", stream.id, stream.source, stream.sink);
             self.notify_stream_deprovisioned(&stream);
+            self.data_tx.remove_sink(&stream);
 
             Some(stream)
         } else {
@@ -168,6 +179,14 @@ impl DataPlane {
             id: stream.id.clone(),
         };
         let _ = self.event_tx.send(event);
+    }
+    
+    pub fn add_stream_events_subscriber(&self, stream_id: String) {
+        todo!()
+    }
+
+    pub fn remove_stream_events_subscriber(&self, stream_id: String) {
+        todo!()
     }
 }
 
@@ -341,4 +360,3 @@ impl ConnectionManager {
         Ok(())
     }
 }
-

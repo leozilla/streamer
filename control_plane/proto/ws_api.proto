@@ -4,18 +4,31 @@ package ws_api;
 
 message WsRx {
     oneof payload {
-        SubscribeStreamsRequest subscribe_request = 1;
+        SubscribeStreamsRequest subscribe_streams_request = 1;
+        SubscribeStreamRequest subscribe_stream_request = 2;
+        UnsubscribeStreamRequest unsubscribe_stream_request = 3;
     }
 }
 
 message SubscribeStreamsRequest {
 }
 
+message SubscribeStreamRequest {
+    string stream_id = 1;
+}
+
+message UnsubscribeStreamRequest {
+    string stream_id = 1;
+}
+
 message WsTx {
     oneof payload {
-        SubscribeStreamsReply subscribe_reply = 1;
-        StreamProvisionedEvent stream_provisioned_event = 2;
-        StreamDeprovisionedEvent stream_deprovisioned_event = 3;
+        SubscribeStreamsReply subscribe_streams_reply = 1;
+        SubscribeStreamReply subscribe_stream_reply = 2;
+        UnsubscribeStreamReply unsubscribe_stream_reply = 3;
+        StreamProvisionedEvent stream_provisioned_event = 4;
+        StreamDeprovisionedEvent stream_deprovisioned_event = 5;
+        StreamUpdateEvent stream_update_event = 6;
     }
 }
 
@@ -24,14 +37,30 @@ message SubscribeStreamsReply {
     string message = 2;
 }
 
+message SubscribeStreamReply {
+    uint32 status = 1;
+    string message = 2;
+}
+
+message UnsubscribeStreamReply {
+    uint32 status = 1;
+    string message = 2;
+}
+
 message StreamProvisionedEvent {
-    string id = 1;
+    string stream_id = 1;
     uint32 source_port = 2;
     uint32 sink_port = 3;
 }
 
 message StreamDeprovisionedEvent {
-    string id = 1;
+    string stream_id = 1;
+}
+
+message StreamUpdateEvent {
+    string stream_id = 1;
+    bool rx_active = 2;
+    bool tx_active = 3;
 }
 
 /*

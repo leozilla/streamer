@@ -68,7 +68,7 @@ impl WebServer {
 
                     match msg {
                         Message::Text(text) => {
-                            Self::handle_text_message(&mut socket, data_plane.clone(), &mut is_subscribed, text).await;                            
+                            Self::handle_text_message(&mut socket, Arc::clone(&data_plane), &mut is_subscribed, text).await;                            
                         }
                         Message::Close(_) => {
                             debug!("Client initiated a clean disconnect {:?}", socket);
@@ -96,9 +96,15 @@ impl WebServer {
                 debug!("Handling {:?}", request);
 
                 match request.payload {
-                    Some(ws_api::ws_rx::Payload::SubscribeRequest(request)) => {                           
+                    Some(ws_api::ws_rx::Payload::SubscribeStreamsRequest(request)) => {                           
                         Self::handle_subscribe_streams_req(socket, request, &data_plane).await;
                         *is_subscribed = true;
+                    },
+                    Some(ws_api::ws_rx::Payload::SubscribeStreamRequest(request)) => {
+                        Self::handle_subscribe_stream_req(socket, request, &data_plane).await;
+                    },
+                    Some(ws_api::ws_rx::Payload::UnsubscribeStreamRequest(request)) => {
+                        Self::handle_unsubscribe_stream_req(socket, request, &data_plane).await;
                     },
                     None => {}
                 }                                  
@@ -116,13 +122,13 @@ impl WebServer {
         };
 
         let tx = ws_api::WsTx {
-            payload: Some(ws_api::ws_tx::Payload::SubscribeReply(reply))
+            payload: Some(ws_api::ws_tx::Payload::SubscribeStreamsReply(reply))
         };
         Self::send_json(socket, tx).await;
 
         for stream in data_plane.list_provisioned_streams() {
             let evt = ws_api::StreamProvisionedEvent {
-                id: stream.id,
+                stream_id: stream.id,
                 source_port: u32::from(stream.source),
                 sink_port: u32::from(stream.sink),
             };
@@ -133,11 +139,39 @@ impl WebServer {
         }
     }
 
+    async fn handle_subscribe_stream_req(socket: &mut WebSocket, request: ws_api::SubscribeStreamRequest, data_plane: &DataPlane) {
+        data_plane.add_stream_events_subscriber(request.stream_id);
+        
+        let reply = ws_api::SubscribeStreamReply {
+            status: 0,
+            message: "Succees".to_string()
+        };
+
+        let tx = ws_api::WsTx {
+            payload: Some(ws_api::ws_tx::Payload::SubscribeStreamReply(reply))
+        };
+        Self::send_json(socket, tx).await;
+    }
+
+    async fn handle_unsubscribe_stream_req(socket: &mut WebSocket, request: ws_api::UnsubscribeStreamRequest, data_plane: &DataPlane) {
+        data_plane.remove_stream_events_subscriber(request.stream_id);
+        
+        let reply = ws_api::UnsubscribeStreamReply {
+            status: 0,
+            message: "Succees".to_string()
+        };
+
+        let tx = ws_api::WsTx {
+            payload: Some(ws_api::ws_tx::Payload::UnsubscribeStreamReply(reply))
+        };
+        Self::send_json(socket, tx).await;
+    }
+
     async fn handle_evt(socket: &mut WebSocket, data_event: data_plane::DataPlaneEvent) {
         match data_event {
             data_plane::DataPlaneEvent::StreamProvisioned { id, source_port, sink_port } => {
                 let evt = ws_api::StreamProvisionedEvent {
-                    id,
+                    stream_id: id,
                     source_port: u32::from(source_port),
                     sink_port: u32::from(sink_port),
                 };
@@ -148,10 +182,21 @@ impl WebServer {
             }
             data_plane::DataPlaneEvent::StreamDeprovisioned { id } => {
                 let evt = ws_api::StreamDeprovisionedEvent {
-                    id
+                    stream_id: id
                 };
                 let tx = ws_api::WsTx {
                     payload: Some(ws_api::ws_tx::Payload::StreamDeprovisionedEvent(evt))
+                };
+                Self::send_json(socket, tx).await;
+            }
+            data_plane::DataPlaneEvent::StreamUpdated { id, rx_active, tx_active } => {
+                let evt = ws_api::StreamUpdateEvent {
+                    stream_id: id,
+                    rx_active,
+                    tx_active
+                };
+                let tx = ws_api::WsTx {
+                    payload: Some(ws_api::ws_tx::Payload::StreamUpdateEvent(evt))
                 };
                 Self::send_json(socket, tx).await;
             }
