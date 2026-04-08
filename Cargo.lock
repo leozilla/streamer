@@ -220,6 +220,7 @@ name = "control_plane"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "dashmap",
  "data_plane",
  "prost",
  "serde",

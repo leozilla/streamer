@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tonic::{Request, Response, Status};
 
-use data_plane::DataPlane;
+use crate::ControlPlane;
 use crate::config_store::{ConfigStore, ConfigStoreError};
 
 pub mod grpc_api {
@@ -14,14 +14,14 @@ use grpc_api::*;
 
 pub struct StreamerImpl<C: ConfigStore> {
     config_store: Arc<C>,
-    data_plane: Arc<DataPlane>,
+    ctrl_plane: Arc<ControlPlane<C>>,
 }
 
 impl<C: ConfigStore> StreamerImpl<C> {
-    pub fn new(config_store: Arc<C>, data_plane: Arc<DataPlane>) -> Self {
+    pub fn new(config_store: Arc<C>, ctrl_plane: Arc<ControlPlane<C>>) -> Self {
         Self {
             config_store,
-            data_plane,
+            ctrl_plane,
         }
     }
 }
@@ -62,7 +62,7 @@ impl<C: ConfigStore + 'static> Streamer for StreamerImpl<C> {
         _: Request<ListProvisionedStreamsRequest>,
     ) -> Result<Response<ListProvisionedStreamsReply>, Status> {
         let reply = ListProvisionedStreamsReply {
-            streams: self.data_plane.list_provisioned_streams()
+            streams: self.ctrl_plane.list_provisioned_streams()
                 .into_iter()
                 .map(|stream|
                     ShortStreamDescription {
@@ -86,7 +86,7 @@ impl<C: ConfigStore + 'static> Streamer for StreamerImpl<C> {
             return Err(Status::invalid_argument("Invalid port number"));
         }
 
-        let result = match self.data_plane.provision_stream(request.source_port as u16, request.sink_port as u16).await {
+        let result = match self.ctrl_plane.provision_stream(request.source_port as u16, request.sink_port as u16).await {
              Ok(stream) => {
                 let reply = ProvisionStreamReply {
                     stream: Some(FullStreamDescription {
@@ -112,13 +112,13 @@ impl<C: ConfigStore + 'static> Streamer for StreamerImpl<C> {
         &self,
         request: Request<DeprovisionStreamRequest>,
     ) -> Result<Response<DeprovisionStreamReply>, Status> {
-        let result = match self.data_plane.deprovision_stream(&request.into_inner().stream_id).await {
-             Some(_) => {
+        let result = match self.ctrl_plane.deprovision_stream(&request.into_inner().stream_id).await {
+            Ok(_) => {
                 let reply = DeprovisionStreamReply {
                 };
                 Ok(Response::new(reply))
             },
-            None => {
+            Err(_) => {
                 Err(Status::not_found("Stream not found"))
             },
         };

@@ -6,8 +6,8 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 mod config;
 mod metrics;
 use config::{Config, InMemoryConfigStore};
-use control_plane::ControlPlane;
-use data_plane::DataPlane;
+use control_plane::{ControlPlane, ControlPlaneEvent};
+use data_plane::{DataPlane, DataPlaneEvent};
 use crate::metrics::MetricsExporter;
 
 #[tokio::main]
@@ -18,11 +18,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config: Config = Config::parse().expect("Config parsed");
     config.log();
     
+    let (event_tx, _event_rx) = broadcast::channel(100);
+
     let config_store = Arc::new(InMemoryConfigStore::new(&config));
-    let data_plane = Arc::new(DataPlane::new());
-    let control_plane = ControlPlane::new(
+    let data_plane = Arc::new(DataPlane::new(event_tx.clone()));
+    let control_plane = Arc::new(ControlPlane::new(
         Arc::clone(&config_store), 
-        Arc::clone(&data_plane));
+        Arc::clone(&data_plane),
+        event_tx.clone()));
  
     MetricsExporter::new().start();
     data_plane.start().expect("Data plane started");
@@ -45,4 +48,13 @@ fn init_tracing() {
         .with(fmt::layer())
         .with(filter)
         .init();
+}
+
+pub trait ServiceEvent {
+}
+
+impl ControlPlaneEvent for ServiceEvent {
+}
+
+impl DataPlaneEvent for ServiceEvent {
 }

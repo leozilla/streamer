@@ -10,6 +10,7 @@ tonic-reflection = "0.13" # Matches your tonic version
 axum = { version = "0.8.8", features = ["ws"] }
 tower-http = { version = "0.5", features = ["fs"] }
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "full"] }
+dashmap = "6.1.0"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = "0.3"

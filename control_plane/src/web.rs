@@ -8,19 +8,24 @@ use serde::Serialize;
 use tower_http::services::ServeDir;
 use tracing::{debug, trace, error};
 use data_plane::DataPlane;
+use crate::config_store::ConfigStore;
+use crate::ControlPlane;
+use crate::ControlPlaneEvent;
 
 pub mod ws_api {
     tonic::include_proto!("ws_api");
 }
 
-pub struct WebServer {
+pub struct WebServer<C: ConfigStore> {
+    ctrl_plane: Arc<ControlPlane<C>>,
     data_plane: Arc<DataPlane>,
 }
 
-impl WebServer {
-    pub fn new(data_plane: Arc<DataPlane>) -> Self {
+impl<C: ConfigStore + 'static> WebServer<C> {
+    pub fn new(ctrl_plane: Arc<ControlPlane<C>>, data_plane: Arc<DataPlane>) -> Self {
         Self {
             data_plane,
+            ctrl_plane,
         }
     }
 
@@ -29,7 +34,7 @@ impl WebServer {
         let app = Router::new()
             .nest_service("/mgmt", mgmt_service)
             .route("/ws", get(Self::ws_handler))
-            .with_state(self.data_plane.clone());
+            .with_state((self.ctrl_plane.clone(), self.data_plane.clone()));
 
         let listener = tokio::net::TcpListener::bind(addr).await?;
         axum::serve(
@@ -42,12 +47,12 @@ impl WebServer {
     async fn ws_handler(
         ws: WebSocketUpgrade,
         ConnectInfo(addr): ConnectInfo<SocketAddr>,
-        State(data_plane): State<Arc<DataPlane>>
+        State(planes): State<(Arc<ControlPlane<C>>, Arc<DataPlane>)>
     ) -> Response {
-        ws.on_upgrade(move |socket| Self::handle_socket(socket, addr, data_plane))
+        ws.on_upgrade(move |socket| Self::handle_socket(socket, addr, planes.0, planes.1))
     }
 
-    async fn handle_socket(mut socket: WebSocket, peer: SocketAddr, data_plane: Arc<DataPlane>) {
+    async fn handle_socket(mut socket: WebSocket, peer: SocketAddr, ctrl_plane: Arc<ControlPlane<C>>, data_plane: Arc<DataPlane>) {
         debug!("Client connected {:}", peer);
 
         let mut event_rx = data_plane.subscribe_events();
@@ -68,7 +73,7 @@ impl WebServer {
 
                     match msg {
                         Message::Text(text) => {
-                            Self::handle_text_message(&mut socket, Arc::clone(&data_plane), &mut is_subscribed, text).await;                            
+                            Self::handle_text_message(&mut socket, Arc::clone(&ctrl_plane), Arc::clone(&data_plane), &mut is_subscribed, text).await;                            
                         }
                         Message::Close(_) => {
                             debug!("Client initiated a clean disconnect {:?}", socket);
@@ -88,7 +93,7 @@ impl WebServer {
         }
     }
 
-    async fn handle_text_message(socket: &mut WebSocket, data_plane: Arc<DataPlane>, is_subscribed: &mut bool, text: Utf8Bytes) {
+    async fn handle_text_message(socket: &mut WebSocket, ctrl_plane: Arc<ControlPlane<C>>, data_plane: Arc<DataPlane>, is_subscribed: &mut bool, text: Utf8Bytes) {
         trace!("Received text from client: {}", text);
         
         match serde_json::from_str::<ws_api::WsRx>(&text) {
@@ -97,7 +102,7 @@ impl WebServer {
 
                 match request.payload {
                     Some(ws_api::ws_rx::Payload::SubscribeStreamsRequest(request)) => {                           
-                        Self::handle_subscribe_streams_req(socket, request, &data_plane).await;
+                        Self::handle_subscribe_streams_req(socket, request, &ctrl_plane).await;
                         *is_subscribed = true;
                     },
                     Some(ws_api::ws_rx::Payload::SubscribeStreamRequest(request)) => {
@@ -115,7 +120,7 @@ impl WebServer {
         }
     }
 
-    async fn handle_subscribe_streams_req(socket: &mut WebSocket, _request: ws_api::SubscribeStreamsRequest, data_plane: &DataPlane) {
+    async fn handle_subscribe_streams_req(socket: &mut WebSocket, _request: ws_api::SubscribeStreamsRequest, ctrl_plane: &ControlPlane<C>) {
         let reply = ws_api::SubscribeStreamsReply {
             status: 0,
             message: "Succees".to_string()
@@ -126,7 +131,7 @@ impl WebServer {
         };
         Self::send_json(socket, tx).await;
 
-        for stream in data_plane.list_provisioned_streams() {
+        for stream in ctrl_plane.list_provisioned_streams() {
             let evt = ws_api::StreamProvisionedEvent {
                 stream_id: stream.id,
                 source_port: u32::from(stream.source),
@@ -169,7 +174,7 @@ impl WebServer {
 
     async fn handle_evt(socket: &mut WebSocket, data_event: data_plane::DataPlaneEvent) {
         match data_event {
-            data_plane::DataPlaneEvent::StreamProvisioned { id, source_port, sink_port } => {
+            ControlPlaneEvent::StreamProvisioned { id, source_port, sink_port } => {
                 let evt = ws_api::StreamProvisionedEvent {
                     stream_id: id,
                     source_port: u32::from(source_port),
@@ -180,7 +185,7 @@ impl WebServer {
                 };
                 Self::send_json(socket, tx).await;
             }
-            data_plane::DataPlaneEvent::StreamDeprovisioned { id } => {
+            ControlPlaneEvent::StreamDeprovisioned { id } => {
                 let evt = ws_api::StreamDeprovisionedEvent {
                     stream_id: id
                 };
