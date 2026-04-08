@@ -93,6 +93,10 @@ impl<C: ConfigStore + 'static> ControlPlane<C> {
         Ok(())
     }
 
+    pub fn subscribe_events(&self) -> broadcast::Receiver<ControlPlaneEvent> {
+        self.event_tx.subscribe()
+    }
+
     pub fn list_provisioned_streams(&self) -> Vec<StreamDescription> {
         self.stream_registry.list_streams()
     }

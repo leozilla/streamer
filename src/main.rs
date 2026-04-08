@@ -18,14 +18,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config: Config = Config::parse().expect("Config parsed");
     config.log();
     
-    let (event_tx, _event_rx) = broadcast::channel(100);
+    let (ctrl_event_tx, _) = tokio::sync::broadcast::channel(100);
+    let (data_event_tx, _) = tokio::sync::broadcast::channel(100);
 
     let config_store = Arc::new(InMemoryConfigStore::new(&config));
-    let data_plane = Arc::new(DataPlane::new(event_tx.clone()));
+    let data_plane = Arc::new(DataPlane::new(data_event_tx));
     let control_plane = Arc::new(ControlPlane::new(
         Arc::clone(&config_store), 
         Arc::clone(&data_plane),
-        event_tx.clone()));
+        ctrl_event_tx));
  
     MetricsExporter::new().start();
     data_plane.start().expect("Data plane started");
@@ -48,13 +49,4 @@ fn init_tracing() {
         .with(fmt::layer())
         .with(filter)
         .init();
-}
-
-pub trait ServiceEvent {
-}
-
-impl ControlPlaneEvent for ServiceEvent {
-}
-
-impl DataPlaneEvent for ServiceEvent {
 }

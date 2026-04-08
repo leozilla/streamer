@@ -55,7 +55,8 @@ impl<C: ConfigStore + 'static> WebServer<C> {
     async fn handle_socket(mut socket: WebSocket, peer: SocketAddr, ctrl_plane: Arc<ControlPlane<C>>, data_plane: Arc<DataPlane>) {
         debug!("Client connected {:}", peer);
 
-        let mut event_rx = data_plane.subscribe_events();
+        let mut data_event_rx = data_plane.subscribe_events();
+        let mut ctrl_event_rx = ctrl_plane.subscribe_events();
         let mut is_subscribed = false;
 
         loop {
@@ -86,8 +87,13 @@ impl<C: ConfigStore + 'static> WebServer<C> {
                 }
                 
                 // 2. Handle outgoing event updates from the DataPlane
-                Ok(data_event) = event_rx.recv(), if is_subscribed => {
-                    Self::handle_evt(&mut socket, data_event).await;
+                Ok(data_event) = data_event_rx.recv(), if is_subscribed => {
+                    Self::handle_data_evt(&mut socket, data_event).await;
+                }
+
+                // 3. Handle outgoing event updates from the ControlPlane
+                Ok(ctrl_event) = ctrl_event_rx.recv(), if is_subscribed => {
+                    Self::handle_ctrl_evt(&mut socket, ctrl_event).await;
                 }
             }
         }
@@ -172,8 +178,24 @@ impl<C: ConfigStore + 'static> WebServer<C> {
         Self::send_json(socket, tx).await;
     }
 
-    async fn handle_evt(socket: &mut WebSocket, data_event: data_plane::DataPlaneEvent) {
+    async fn handle_data_evt(socket: &mut WebSocket, data_event: data_plane::DataPlaneEvent) {
         match data_event {
+            data_plane::DataPlaneEvent::StreamUpdated { id, rx_active, tx_active } => {
+                let evt = ws_api::StreamUpdateEvent {
+                    stream_id: id,
+                    rx_active,
+                    tx_active
+                };
+                let tx = ws_api::WsTx {
+                    payload: Some(ws_api::ws_tx::Payload::StreamUpdateEvent(evt))
+                };
+                Self::send_json(socket, tx).await;
+            }
+        }
+    }
+
+    async fn handle_ctrl_evt(socket: &mut WebSocket, ctrl_event: ControlPlaneEvent) {
+        match ctrl_event {
             ControlPlaneEvent::StreamProvisioned { id, source_port, sink_port } => {
                 let evt = ws_api::StreamProvisionedEvent {
                     stream_id: id,
@@ -191,17 +213,6 @@ impl<C: ConfigStore + 'static> WebServer<C> {
                 };
                 let tx = ws_api::WsTx {
                     payload: Some(ws_api::ws_tx::Payload::StreamDeprovisionedEvent(evt))
-                };
-                Self::send_json(socket, tx).await;
-            }
-            data_plane::DataPlaneEvent::StreamUpdated { id, rx_active, tx_active } => {
-                let evt = ws_api::StreamUpdateEvent {
-                    stream_id: id,
-                    rx_active,
-                    tx_active
-                };
-                let tx = ws_api::WsTx {
-                    payload: Some(ws_api::ws_tx::Payload::StreamUpdateEvent(evt))
                 };
                 Self::send_json(socket, tx).await;
             }
