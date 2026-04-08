@@ -274,7 +274,7 @@ impl ConnectionManager {
         };
 
         cell.get_or_try_init(|| async move {
-            debug!("Binding to port {}", port);
+            info!("Binding to port {}", port);
 
             let socket = tokio::net::UdpSocket::bind(format!("0.0.0.0:{}", port)).await?;
 

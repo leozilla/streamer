@@ -13,6 +13,8 @@ use crate::DataPlaneEvent;
 struct RxMetrics {
     dropped_zero_byte: metrics::Counter,
     dropped_io_error: metrics::Counter,
+    packets_received: metrics::Counter,
+    bytes_received: metrics::Counter,
 }
 
 pub struct DataRx {
@@ -65,6 +67,9 @@ impl DataRx {
                         Ok((n, addr)) if n > 0 => {
                             trace!("Received data on source {} from {:?}, bytes={}", rx_task.source, addr, n);
                             
+                            metrics.packets_received.increment(1);
+                            metrics.bytes_received.increment(n as u64);
+
                             let data = buf.split().freeze();
                             let mut data_reader = data.clone();
                             
@@ -116,6 +121,14 @@ impl RxMetrics {
             dropped_io_error: metrics::counter!(
                 "streamer_rx_dropped_packets_total", 
                 "reason" => "io_error",
+                "source_port" => port_str.clone()
+            ),
+            packets_received: metrics::counter!(
+                "streamer_rx_packets_total",
+                "source_port" => port_str.clone()
+            ),
+            bytes_received: metrics::counter!(
+                "streamer_rx_bytes_total",
                 "source_port" => port_str
             ),
         }

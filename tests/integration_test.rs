@@ -1,10 +1,12 @@
 mod common;
+mod rtp_tester;
 
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}};
 use rtp::packet::Packet;
 use rtp::header::Header;
 use webrtc_util::marshal::Marshal;
 
+use rtp_tester::RtpTx;
 use control_plane::grpc_api::*;
 
 #[tokio::test]
@@ -95,15 +97,26 @@ async fn test_stream_udp_data_flow_integration() {
         payload: bytes::Bytes::from_static(b"Hello"),
     };
     let data = rtp_packet.marshal().expect("Failed to marshal RTP packet");
-    tx_socket.send_to(&data, addr).await.expect("Failed to write to stream");
 
-    let mut buf = [0u8; 1024];
-    
-    let (n, _) = rx_socket1.recv_from(&mut buf).await.expect("Failed to read from UDP socket 1");
-    assert_eq!(&buf[..n], data.as_ref());
-    
-    let (n, _) = rx_socket2.recv_from(&mut buf).await.expect("Failed to read from UDP socket 1");
-    assert_eq!(&buf[..n], data.as_ref());
+    let rx1 = async {
+        let mut buf = [0u8; 1024];
+        let (n, _) = rx_socket1.recv_from(&mut buf).await.expect("Failed to read from UDP socket 1");
+        assert_eq!(&buf[..n], data.as_ref());
+    };
+
+    let rx2 = async {
+        let mut buf = [0u8; 1024];
+        let (n, _) = rx_socket2.recv_from(&mut buf).await.expect("Failed to read from UDP socket 2");
+        assert_eq!(&buf[..n], data.as_ref());
+    };
+
+    let tx = async {
+        // Give receivers a moment to start listening
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        tx_socket.send_to(&data, addr).await.expect("Failed to write to stream");
+    };
+
+    tokio::join!(rx1, rx2, tx);
 }
 
 // cargo test test_pipeline_throughput --release -- --ignored --nocapture
@@ -120,56 +133,34 @@ async fn test_pipeline_throughput() {
     // Allow time for sockets to bind
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-    // Sender socket blasting data to the streamer
-    let tx_socket = std::sync::Arc::new(common::bind_udp(0).await.expect("UDP tx socket"));
-    let target_addr = format!("127.0.0.1:{}", src_port);
+    // Calculate pacing for a specific bitrate    
+    let interval_millis = 20 as u64;
+    let packets_per_sec = tokio::time::Duration::from_secs(1).as_millis() as f64 / interval_millis as f64;    
+    let num_packets = (packets_per_sec * 5.0) as u64; // Test for exactly 5 seconds
     
-    // Receiver socket listening on the sink port
-    let rx_socket = common::bind_udp(sink_port).await.expect("UDP rx socket");
-
-    let rtp_packet = Packet {
-        header: Header {
-            version: 2,
-            sequence_number: 1,
-            ..Default::default()
-        },
-        payload: bytes::Bytes::from(vec![0u8; 1000]),
-    };
-    let payload = rtp_packet.marshal().expect("Failed to marshal RTP packet");
-    let num_packets = 100_000; // ~100 MB total
-
     let start_time = std::time::Instant::now();
 
-    // 2. Receive the data to measure end-to-end throughput
-    let mut buf = [0u8; 2048];
-    let mut received_bytes = 0;
-    let mut received_packets = 0;
+    let target_addr = format!("127.0.0.1:{}", src_port).parse().expect("Invalid target address");
+    let rtp_tx = rtp_tester::RtpTx::bind().await.expect("RTP Tx bound to port");
+    let rtp_rx = rtp_tester::RtpRx::bind(sink_port).await.expect("RTP Rx bound to port");
 
-    tokio::spawn(async move {
-        while received_packets < num_packets {
-            match tokio::time::timeout(tokio::time::Duration::from_millis(500), rx_socket.recv_from(&mut buf)).await {
-                Ok(Ok((n, _))) => {
-                    received_bytes += n;
-                    received_packets += 1;
-                }
-                _ => break, // Timeout means the pipeline drained or dropped packets
-            }
-        }
-    });
+    let rx_task = async { 
+        let (received_packets, received_bytes) = rtp_rx.receive_packets(num_packets).await;
+        (received_packets, received_bytes)
+    };
+    let tx_task = async { 
+        rtp_tx.send_packets_at_rate(target_addr, interval_millis, num_packets).await;
+    };
 
-    // 1. Spawn a task to rapidly pump data into the streamer
-    let sender = std::sync::Arc::clone(&tx_socket);
-    tokio::spawn(async move {
-        for _ in 0..num_packets {
-            let _ = sender.send_to(&payload, &target_addr).await;
-        }
-    });
+    let ((received_packets, received_bytes), _) = tokio::join!(rx_task, tx_task);
 
     let elapsed = start_time.elapsed();
     let mbps = (received_bytes as f64 / 1_024_000.0) / elapsed.as_secs_f64();
     
     println!("--- Throughput Test Results ---");
-    println!("Received: {}/{} packets", received_packets, num_packets);
+    println!("Packets/sec: {}", packets_per_sec);
+    println!("Received bytes: {}", received_bytes);
+    println!("Received: {}/{} packets = {}%", received_packets, num_packets, received_packets as f64 / num_packets as f64 * 100.0);
     println!("Elapsed time: {:.2?}", elapsed);
     println!("Throughput: {:.2} MB/s", mbps);
     println!("-------------------------------");
