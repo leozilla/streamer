@@ -6,8 +6,8 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 mod config;
 mod metrics;
 use config::{Config, InMemoryConfigStore};
-use control_plane::{ControlPlane, ControlPlaneEvent};
-use data_plane::{DataPlane, DataPlaneEvent};
+use control_plane::ControlPlane;
+use data_plane::DataPlane;
 use crate::metrics::MetricsExporter;
 
 #[tokio::main]

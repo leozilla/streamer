@@ -28,7 +28,7 @@ message WsTx {
         UnsubscribeStreamReply unsubscribe_stream_reply = 3;
         StreamProvisionedEvent stream_provisioned_event = 4;
         StreamDeprovisionedEvent stream_deprovisioned_event = 5;
-        StreamUpdateEvent stream_update_event = 6;
+        StreamRxPortUpdateEvent stream_rx_port_update_event = 6;
     }
 }
 
@@ -57,10 +57,10 @@ message StreamDeprovisionedEvent {
     string stream_id = 1;
 }
 
-message StreamUpdateEvent {
-    string stream_id = 1;
-    bool rx_active = 2;
-    bool tx_active = 3;
+message StreamRxPortUpdateEvent {
+    uint32 source_port = 1;
+    uint32 sum_packets_received = 2;
+    uint64 sum_bytes_received = 3;    
 }
 
 /*

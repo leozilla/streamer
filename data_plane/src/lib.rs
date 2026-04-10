@@ -60,11 +60,11 @@ struct SourceRxTask {
 
 #[derive(Clone, Debug)]
 pub enum DataPlaneEvent {
-    PortTraceUpdated {
+    RxPortTraceUpdate {
         port: Port,
-        rx_active: bool,
-        tx_active: bool,
-    }
+        sum_packets_recv: u32,
+        sum_bytes_recv: u64,        
+    },
 }
 
 impl DataPlane {

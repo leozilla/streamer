@@ -88,7 +88,7 @@ impl<C: ConfigStore + 'static> WebServer<C> {
                 
                 // 2. Handle outgoing event updates from the DataPlane
                 Ok(data_event) = data_event_rx.recv(), if is_subscribed => {
-                    Self::handle_data_evt(&mut socket, data_event, &ctrl_plane).await;
+                    Self::handle_data_evt(&mut socket, data_event).await;
                 }
 
                 // 3. Handle outgoing event updates from the ControlPlane
@@ -121,7 +121,7 @@ impl<C: ConfigStore + 'static> WebServer<C> {
                 }                                  
             }
             Err(e) => {
-                error!("Failed to deserialize JSON to SubscribeStreamsRequest: {}", e);
+                error!("Failed to deserialize JSON: {}", e);
             }
         }
     }
@@ -182,20 +182,18 @@ impl<C: ConfigStore + 'static> WebServer<C> {
         Self::send_json(socket, tx).await;
     }
 
-    async fn handle_data_evt(socket: &mut WebSocket, data_event: data_plane::DataPlaneEvent, ctrl_plane: &ControlPlane<C>) {
+    async fn handle_data_evt(socket: &mut WebSocket, data_event: data_plane::DataPlaneEvent) {
         match data_event {
-            data_plane::DataPlaneEvent::PortTraceUpdated { port, rx_active, tx_active } => {
-                for stream in ctrl_plane.list_provisioned_streams().into_iter().filter(|s| s.source == port) {
-                    let evt = ws_api::StreamUpdateEvent {
-                        stream_id: stream.id,
-                        rx_active,
-                        tx_active
-                    };
-                    let tx = ws_api::WsTx {
-                        payload: Some(ws_api::ws_tx::Payload::StreamUpdateEvent(evt))
-                    };
-                    Self::send_json(socket, tx).await;
-                }
+            data_plane::DataPlaneEvent::RxPortTraceUpdate { port, sum_packets_recv, sum_bytes_recv } => {
+                let evt = ws_api::StreamRxPortUpdateEvent {
+                    source_port: u32::from(port),
+                    sum_packets_received: sum_packets_recv,
+                    sum_bytes_received: sum_bytes_recv
+                };
+                let tx = ws_api::WsTx {
+                    payload: Some(ws_api::ws_tx::Payload::StreamRxPortUpdateEvent(evt))
+                };
+                Self::send_json(socket, tx).await;
             }
         }
     }

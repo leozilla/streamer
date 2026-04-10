@@ -136,7 +136,7 @@ async fn test_pipeline_throughput() {
     // Calculate pacing for a specific bitrate    
     let interval_millis = 20 as u64;
     let packets_per_sec = tokio::time::Duration::from_secs(1).as_millis() as f64 / interval_millis as f64;    
-    let num_packets = (packets_per_sec * 5.0) as u64; // Test for exactly 5 seconds
+    let num_packets = (packets_per_sec * 15.0) as u64; // Test for exactly 15 seconds
     
     let start_time = std::time::Instant::now();
 

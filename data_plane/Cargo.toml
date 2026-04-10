@@ -14,3 +14,4 @@ moka = { version = "0.12", features = ["future"] }
 metrics = "0.24"
 rtp = "0.17.1"
 webrtc-util = "0.17.1"
+arc-swap = "1.0"

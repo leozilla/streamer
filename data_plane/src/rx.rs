@@ -1,11 +1,13 @@
 use std::time::Instant;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use dashmap::DashMap;
 use rtp::packet::Packet;
 use webrtc_util::marshal::Unmarshal;
 use tokio::sync::mpsc;
 use tokio::sync::broadcast;
+use tokio::time::Duration;
 use std::sync::Mutex;
 use tracing::{debug, trace, warn, error};
 
@@ -17,8 +19,7 @@ use crate::Port;
 pub struct DataRx {
     con_rx: Mutex<Option<mpsc::Receiver<SourceRxTask>>>,
     proc_tx: mpsc::Sender<ProcessingJob>,
-    traced_ports: Arc<DashMap<Port, RxTracing>>,
-    ctrl_tx: broadcast::Sender<RxControlMessage>,
+    traced_ports: Arc<DashMap<Port, Arc<RxTracing>>>,
     event_tx: broadcast::Sender<DataPlaneEvent>,
 }
 
@@ -29,32 +30,20 @@ struct RxMetrics {
     bytes_received: metrics::Counter,
 }
 
-struct EnabledRxTracing {
-    subscribers: u32,
-    rx_last_recv_time: Option<Instant>,
-    rx_sum_bytes: u64,
-    rx_sum_packets: u32,
-}
-
-enum RxTracing {
-    Enabled(EnabledRxTracing),
-    Disabled,
-}
-
-#[derive(Clone, Debug)]
-enum RxControlMessage {
-    EnableTracing(Port),
-    DisableTracing(Port),
+struct RxTracing {
+    enabled: AtomicBool,
+    subscribers: AtomicU32,
+    rx_last_recv_time: Mutex<Option<Instant>>,
+    rx_sum_bytes: AtomicU64,
+    rx_sum_packets: AtomicU32,
 }
 
 impl DataRx {
     pub fn new(con_rx: mpsc::Receiver<SourceRxTask>, proc_tx: mpsc::Sender<ProcessingJob>, event_tx: broadcast::Sender<DataPlaneEvent>) -> Self {
-        let (ctrl_tx, _) = broadcast::channel(100);
         Self { 
             con_rx: Mutex::new(Some(con_rx)),            
             proc_tx,
             traced_ports: Arc::new(DashMap::new()),
-            ctrl_tx,
             event_tx
         }
     }
@@ -63,7 +52,6 @@ impl DataRx {
         let mut con_rx = self.con_rx.lock().unwrap().take().expect("DataRx started more than once");
         let proc_tx = self.proc_tx.clone();
         let traced_ports = Arc::clone(&self.traced_ports);
-        let ctrl_tx = self.ctrl_tx.clone();
         let event_tx = self.event_tx.clone();
         let traced_ports_tick = Arc::clone(&self.traced_ports);
 
@@ -74,31 +62,34 @@ impl DataRx {
 
                 let proc_tx = proc_tx.clone();
                 let traced_ports = Arc::clone(&traced_ports);
-                let ctrl_rx = ctrl_tx.subscribe();
+                let tracing = Arc::new(RxTracing::new());
+                traced_ports.insert(job.source, Arc::clone(&tracing));
 
-                tokio::spawn(Self::process_udp_socket(job, proc_tx, traced_ports, ctrl_rx));
+                tokio::spawn(Self::process_udp_socket(job, proc_tx, tracing, traced_ports));
             }
         });
 
-        // tick every second to update tracing info and emit events
+        // tick every second to emit events
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
             loop {
                 interval.tick().await;
-                for mut entry in traced_ports_tick.iter_mut() {
+                let now = Instant::now();
+
+                for entry in traced_ports_tick.iter() {
                     let port = *entry.key();
-                    if let RxTracing::Enabled(ref mut trace_data) = *entry.value_mut() {
-                        let rx_active = trace_data.rx_sum_packets > 0;
-                        
-                        let _ = event_tx.send(DataPlaneEvent::PortTraceUpdated {
+                    let trace_data = entry.value();
+
+                    if trace_data.enabled.load(Ordering::Relaxed) 
+                        && trace_data.rx_last_recv_time.lock().unwrap().map_or(false, |last| now.duration_since(last) < Duration::from_secs(1)) {                                                
+                        let _ = event_tx.send(DataPlaneEvent::RxPortTraceUpdate {
                             port,
-                            rx_active,
-                            tx_active: false,
+                            sum_bytes_recv: trace_data.rx_sum_bytes.load(Ordering::Relaxed),
+                            sum_packets_recv: trace_data.rx_sum_packets.load(Ordering::Relaxed),
                         });
-                        
-                        // Reset counters for the next tick
-                        trace_data.rx_sum_packets = 0;
-                        trace_data.rx_sum_bytes = 0;
+
+                        trace_data.rx_sum_bytes.swap(0, Ordering::Relaxed);
+                        trace_data.rx_sum_packets.swap(0, Ordering::Relaxed);
                     }
                 }
             }
@@ -108,14 +99,12 @@ impl DataRx {
     async fn process_udp_socket(
         mut rx_task: SourceRxTask, 
         proc_tx: mpsc::Sender<ProcessingJob>,
-        traced_ports: Arc<DashMap<Port, RxTracing>>,
-        mut ctrl_rx: broadcast::Receiver<RxControlMessage>
-    ) {
-        let mut buf = bytes::BytesMut::with_capacity(512);
-
+        tracing: Arc<RxTracing>,
+        traced_ports: Arc<DashMap<Port, Arc<RxTracing>>>
+    ) {    
         let metrics = RxMetrics::new(rx_task.source);
-        let mut is_traced = traced_ports.contains_key(&rx_task.source);
 
+        let mut buf = bytes::BytesMut::with_capacity(512);
         let socket = rx_task.socket;
         loop {
             buf.reserve(512); // Ensure enough contiguous capacity for the next UDP packet
@@ -124,17 +113,6 @@ impl DataRx {
                     debug!("Source socket {} disconnected, aborting rx task", rx_task.source);
                     break;
                 }
-                Ok(msg) = ctrl_rx.recv() => {
-                    match msg {
-                        RxControlMessage::EnableTracing(port) if port == rx_task.source => {
-                            is_traced = true;
-                        }
-                        RxControlMessage::DisableTracing(port) if port == rx_task.source => {
-                            is_traced = false;
-                        }
-                        _ => {}
-                    }
-                }
                 res = socket.recv_buf_from(&mut buf) => {
                     match res {
                         Ok((n, addr)) if n > 0 => {
@@ -142,11 +120,7 @@ impl DataRx {
                             
                             metrics.packets_received.increment(1);
                             metrics.bytes_received.increment(n as u64);
-                            if is_traced {
-                                if let Some(mut tracing) = traced_ports.get_mut(&rx_task.source) {
-                                    tracing.trace_rx_activity(Instant::now(), n);
-                                }
-                            }
+                            tracing.trace_rx_activity(Instant::now(), n);
 
                             let data = buf.split().freeze();
                             let mut data_reader = data.clone();
@@ -184,42 +158,30 @@ impl DataRx {
                 }    
             }
         }
+        
+        // Clean up the tracing state when the socket task ends
+        traced_ports.remove(&rx_task.source);
     }
 
     pub fn enable_tracing(&self, port: Port) {
         debug!("Enabling tracing for port {}", port);
 
-        self.traced_ports.entry(port).and_modify(|t| {
-            if let RxTracing::Enabled(e) = t {
-                e.subscribers += 1;
+        if let Some(tracing) = self.traced_ports.get(&port) {
+            let prev = tracing.subscribers.fetch_add(1, Ordering::SeqCst);
+            if prev == 0 {
+                tracing.enabled.store(true, Ordering::SeqCst);
             }
-        }).or_insert(RxTracing::Enabled(EnabledRxTracing {
-            subscribers: 1,
-            rx_last_recv_time: None,
-            rx_sum_bytes: 0,
-            rx_sum_packets: 0,
-        }));
-
-        let _ = self.ctrl_tx.send(RxControlMessage::EnableTracing(port));
+        }
     }
 
     pub fn disable_tracing(&self, port: Port) {
         debug!("Disabling tracing for port {}", port);
 
-        let mut remove = false;
-        self.traced_ports.remove_if_mut(&port, |_, t| {
-            if let RxTracing::Enabled(e) = t {
-                e.subscribers -= 1;
-                if e.subscribers == 0 {
-                    remove = true;
-                    return true;
-                }
+        if let Some(tracing) = self.traced_ports.get(&port) {
+            let prev = tracing.subscribers.fetch_sub(1, Ordering::SeqCst);
+            if prev == 1 {
+                tracing.enabled.store(false, Ordering::SeqCst);
             }
-            false
-        });
-
-        if remove {
-            let _ = self.ctrl_tx.send(RxControlMessage::DisableTracing(port));
         }
     }
 }
@@ -251,14 +213,24 @@ impl RxMetrics {
 }
 
 impl RxTracing {
-    fn trace_rx_activity(&mut self, recv_time: Instant, bytes: usize) {
-        match self {
-            RxTracing::Enabled(tracer) => {
-                tracer.rx_last_recv_time = Some(recv_time);
-                tracer.rx_sum_bytes += bytes as u64;
-                tracer.rx_sum_packets += 1;
+    fn new() -> Self {
+        Self {
+            enabled: AtomicBool::new(false),
+            subscribers: AtomicU32::new(0),
+            rx_last_recv_time: Mutex::new(None),
+            rx_sum_bytes: AtomicU64::new(0),
+            rx_sum_packets: AtomicU32::new(0),
+        }
+    }
+
+    #[inline]
+    fn trace_rx_activity(&self, recv_time: Instant, bytes: usize) {
+        if self.enabled.load(Ordering::Relaxed) {
+            if let Ok(mut last_time) = self.rx_last_recv_time.lock() {
+                *last_time = Some(recv_time);
             }
-            RxTracing::Disabled => {}
+            self.rx_sum_bytes.fetch_add(bytes as u64, Ordering::Relaxed);
+            self.rx_sum_packets.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
