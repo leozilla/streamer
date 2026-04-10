@@ -88,7 +88,7 @@ impl<C: ConfigStore + 'static> WebServer<C> {
                 
                 // 2. Handle outgoing event updates from the DataPlane
                 Ok(data_event) = data_event_rx.recv(), if is_subscribed => {
-                    Self::handle_data_evt(&mut socket, data_event).await;
+                    Self::handle_data_evt(&mut socket, data_event, &ctrl_plane).await;
                 }
 
                 // 3. Handle outgoing event updates from the ControlPlane
@@ -112,10 +112,10 @@ impl<C: ConfigStore + 'static> WebServer<C> {
                         *is_subscribed = true;
                     },
                     Some(ws_api::ws_rx::Payload::SubscribeStreamRequest(request)) => {
-                        Self::handle_subscribe_stream_req(socket, request, &data_plane).await;
+                        Self::handle_subscribe_stream_req(socket, request, &data_plane, &ctrl_plane).await;
                     },
                     Some(ws_api::ws_rx::Payload::UnsubscribeStreamRequest(request)) => {
-                        Self::handle_unsubscribe_stream_req(socket, request, &data_plane).await;
+                        Self::handle_unsubscribe_stream_req(socket, request, &data_plane, &ctrl_plane).await;
                     },
                     None => {}
                 }                                  
@@ -150,8 +150,10 @@ impl<C: ConfigStore + 'static> WebServer<C> {
         }
     }
 
-    async fn handle_subscribe_stream_req(socket: &mut WebSocket, request: ws_api::SubscribeStreamRequest, data_plane: &DataPlane) {
-        data_plane.add_stream_events_subscriber(request.stream_id);
+    async fn handle_subscribe_stream_req(socket: &mut WebSocket, request: ws_api::SubscribeStreamRequest, data_plane: &DataPlane, ctrl_plane: &ControlPlane<C>) {
+        if let Some(stream) = ctrl_plane.find_stream_by_id(request.stream_id) {
+            data_plane.enable_tracing(stream.source);
+        }
         
         let reply = ws_api::SubscribeStreamReply {
             status: 0,
@@ -164,8 +166,10 @@ impl<C: ConfigStore + 'static> WebServer<C> {
         Self::send_json(socket, tx).await;
     }
 
-    async fn handle_unsubscribe_stream_req(socket: &mut WebSocket, request: ws_api::UnsubscribeStreamRequest, data_plane: &DataPlane) {
-        data_plane.remove_stream_events_subscriber(request.stream_id);
+    async fn handle_unsubscribe_stream_req(socket: &mut WebSocket, request: ws_api::UnsubscribeStreamRequest, data_plane: &DataPlane, ctrl_plane: &ControlPlane<C>) {
+        if let Some(stream) = ctrl_plane.find_stream_by_id(request.stream_id) {
+            data_plane.disable_tracing(stream.source);
+        }
         
         let reply = ws_api::UnsubscribeStreamReply {
             status: 0,
@@ -178,18 +182,20 @@ impl<C: ConfigStore + 'static> WebServer<C> {
         Self::send_json(socket, tx).await;
     }
 
-    async fn handle_data_evt(socket: &mut WebSocket, data_event: data_plane::DataPlaneEvent) {
+    async fn handle_data_evt(socket: &mut WebSocket, data_event: data_plane::DataPlaneEvent, ctrl_plane: &ControlPlane<C>) {
         match data_event {
-            data_plane::DataPlaneEvent::StreamUpdated { id, rx_active, tx_active } => {
-                let evt = ws_api::StreamUpdateEvent {
-                    stream_id: id,
-                    rx_active,
-                    tx_active
-                };
-                let tx = ws_api::WsTx {
-                    payload: Some(ws_api::ws_tx::Payload::StreamUpdateEvent(evt))
-                };
-                Self::send_json(socket, tx).await;
+            data_plane::DataPlaneEvent::PortTraceUpdated { port, rx_active, tx_active } => {
+                for stream in ctrl_plane.list_provisioned_streams().into_iter().filter(|s| s.source == port) {
+                    let evt = ws_api::StreamUpdateEvent {
+                        stream_id: stream.id,
+                        rx_active,
+                        tx_active
+                    };
+                    let tx = ws_api::WsTx {
+                        payload: Some(ws_api::ws_tx::Payload::StreamUpdateEvent(evt))
+                    };
+                    Self::send_json(socket, tx).await;
+                }
             }
         }
     }

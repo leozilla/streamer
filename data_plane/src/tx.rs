@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 use tokio::sync::broadcast;
+use std::sync::Mutex;
 use tracing::{trace, debug};
 use dashmap::DashMap;
 
@@ -15,13 +16,13 @@ use crate::Port;
 struct Route {
     id: String,
     sink_port: Port,
-    socket: Arc<Mutex<tokio::net::UdpSocket>>,
+    socket: Arc<tokio::net::UdpSocket>,
 }
 
 pub struct DataTx {
     connection_manager: Arc<ConnectionManager>,
     fanout_table: Arc<DashMap<Port, Vec<Route>>>,
-    sink_rx: Arc<Mutex<mpsc::Receiver<SinkTxJob>>>,
+    sink_rx: Mutex<Option<mpsc::Receiver<SinkTxJob>>>,
     event_tx: broadcast::Sender<DataPlaneEvent>,
 }
 
@@ -29,20 +30,18 @@ impl DataTx {
     pub fn new(connection_manager: Arc<ConnectionManager>, sink_rx: mpsc::Receiver<SinkTxJob>, event_tx: broadcast::Sender<DataPlaneEvent>) -> Self {
         Self {
             connection_manager,
-            sink_rx: Arc::new(Mutex::new(sink_rx)),
+            sink_rx: Mutex::new(Some(sink_rx)),
             event_tx,
             fanout_table: Arc::new(DashMap::new()),
         }
     }
 
     pub fn start(&self) { 
-        let sink_rx = Arc::clone(&self.sink_rx);
+        let mut sink_rx = self.sink_rx.lock().unwrap().take().expect("DataTx started more than once");
         let fanout_table = Arc::clone(&self.fanout_table);
         
         // spawn a Tokio task to send data to the sink of the stream (also I/O bound)
         tokio::spawn(async move {
-            let mut sink_rx = sink_rx.lock().await;
-
             while let Some(job) = sink_rx.recv().await {
                 trace!("Received SinkTxJob, source={}, bytes={}", job.source, job.data.len());
 
@@ -87,7 +86,6 @@ impl DataTx {
                 let data = job.data.clone(); // `Bytes::clone` is an extremely cheap pointer copy
             
                 tokio::spawn(async move {
-                    let sink_socket = sink_socket.lock().await;
                     let addr = format!("0.0.0.0:{}", sink_port);
                     let _ = sink_socket.send_to(&data, addr).await;
 

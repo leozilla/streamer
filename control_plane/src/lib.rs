@@ -101,6 +101,10 @@ impl<C: ConfigStore + 'static> ControlPlane<C> {
         self.stream_registry.list_streams()
     }
 
+    pub fn find_stream_by_id(&self, stream_id: String) -> Option<StreamDescription> {
+       self.stream_registry.find_stream_by_id(stream_id)
+    }
+    
     pub async fn provision_stream(&self, source: Port, sink: Port) -> io::Result<StreamDescription> {
         debug!("Provisioning stream {} -> {}", source, sink);
         
@@ -122,11 +126,15 @@ impl<C: ConfigStore + 'static> ControlPlane<C> {
         debug!("Deprovisioning stream with Id {}", id);
 
         if let Some(stream) = self.stream_registry.remove_stream(id) {
-            
-            let has_source = self.stream_registry.has_source(stream.source);
-            let has_sink = self.stream_registry.has_sink(stream.sink);
+            self.data_plane.deprovision_stream(&stream).await?;
 
-            self.data_plane.deprovision_stream(&stream, has_source, has_sink).await?;
+            if !self.stream_registry.is_source_in_use(stream.source) {
+                self.data_plane.deallocate_source_resources(stream.source).await?;
+            }
+
+            if !self.stream_registry.is_sink_in_use(stream.sink) {
+                self.data_plane.deallocate_sink_resources(stream.sink).await?;
+            }
 
             info!("Stream deprovisioned, Id {}, {} -> {}", stream.id, stream.source, stream.sink);
             self.notify_stream_deprovisioned(&stream);          
@@ -205,22 +213,15 @@ impl StreamRegistry {
             .and_then(|r| r.value().iter().find(|s| s.sink == sink).map(|s| (**s).clone()))
     }
 
-    fn for_each_stream_by_source<F>(&self, source: Port, mut f: F)
-    where
-        F: FnMut(&StreamDescription),
-    {
-        if let Some(r) = self.streams_by_source_port.get(&source) {
-            for stream in r.value() {
-                f(&**stream);
-            }
-        }
+    fn find_stream_by_id(&self, stream_id: String) -> Option<StreamDescription> {
+        self.streams_by_id.get(&stream_id).map(|entry| (**entry.value()).clone())
     }
 
-    fn has_source(&self, source: Port) -> bool {
+    fn is_source_in_use(&self, source: Port) -> bool {
         self.streams_by_source_port.contains_key(&source)
     }
 
-    fn has_sink(&self, sink: Port) -> bool {
+    fn is_sink_in_use(&self, sink: Port) -> bool {
         self.streams_by_id.iter().any(|entry| entry.value().sink == sink)
     }
 }

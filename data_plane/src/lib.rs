@@ -26,11 +26,13 @@ pub struct DataPlane {
 
 pub trait ObservableDataPlane {
     fn subscribe_events(&self) -> broadcast::Receiver<DataPlaneEvent>;
+    fn enable_port_tracing(&self, port: Port);
+    fn disable_port_tracing(&self, port: Port);
 }
 
 struct ConnectionManager {
     listeners: Mutex<HashMap<Port, Arc<OnceCell<()>>>>,
-    sockets: Arc<DashMap<Port, Arc<Mutex<UdpSocket>>>>,
+    sockets: Arc<DashMap<Port, Arc<UdpSocket>>>,
     con_tx: mpsc::Sender<SourceRxTask>,
     rx_abort_txs: Arc<DashMap<Port, tokio::sync::oneshot::Sender<()>>>,
 }
@@ -52,14 +54,14 @@ pub struct SinkTxJob {
 #[derive(Debug)]
 struct SourceRxTask {
     source: Port,
-    socket: Arc<Mutex<UdpSocket>>,
+    socket: Arc<UdpSocket>,
     abort_rx: tokio::sync::oneshot::Receiver<()>,
 }
 
 #[derive(Clone, Debug)]
 pub enum DataPlaneEvent {
-    StreamUpdated {
-        id: String,
+    PortTraceUpdated {
+        port: Port,
         rx_active: bool,
         tx_active: bool,
     }
@@ -95,10 +97,6 @@ impl DataPlane {
         Ok(())
     }
 
-    pub fn subscribe_events(&self) -> broadcast::Receiver<DataPlaneEvent> {
-        self.event_tx.subscribe()
-    }
-
     pub async fn provision_stream(&self, stream: &StreamDescription) -> io::Result<()> {
         let _ = self.connection_manager.connect_source(stream.source).await?;
         let _ = self.connection_manager.connect_sink(stream.sink).await?;
@@ -108,25 +106,30 @@ impl DataPlane {
         Ok(())
     }
 
-    pub async fn deprovision_stream(&self, stream: &StreamDescription, has_source: bool, has_sink: bool) -> io::Result<()> {
-        if !has_source {
-            let _ = self.connection_manager.disconnect_source(stream.source).await;
-        }
-        if !has_sink {
-            let _ = self.connection_manager.disconnect_sink(stream.sink).await;
-        }
-
+    pub async fn deprovision_stream(&self, stream: &StreamDescription) -> io::Result<()> {
         self.data_tx.remove_sink(&stream);
 
         Ok(())
     }
     
-    pub fn add_stream_events_subscriber(&self, stream_id: String) {
-        todo!()
+    pub async fn deallocate_source_resources(&self, source: Port) -> io::Result<()> {
+        self.connection_manager.disconnect_source(source).await
     }
 
-    pub fn remove_stream_events_subscriber(&self, stream_id: String) {
-        todo!()
+    pub async fn deallocate_sink_resources(&self, sink: Port) -> io::Result<()> {
+        self.connection_manager.disconnect_sink(sink).await
+    }
+
+    pub fn subscribe_events(&self) -> broadcast::Receiver<DataPlaneEvent> {
+        self.event_tx.subscribe()
+    }
+
+    pub fn enable_tracing(&self, port: Port) {
+        self.data_rx.enable_tracing(port);
+    }
+
+    pub fn disable_tracing(&self, port: Port) {
+        self.data_rx.disable_tracing(port);
     }
 }
 
@@ -147,7 +150,7 @@ impl ConnectionManager {
         }
     }
 
-    fn get_connection(&self, port: &Port) -> Option<Arc<Mutex<UdpSocket>>> {
+    fn get_connection(&self, port: &Port) -> Option<Arc<UdpSocket>> {
         self.sockets.get(port).map(|r| Arc::clone(r.value()))
     }
 
@@ -188,7 +191,7 @@ impl ConnectionManager {
             let rx_abort_txs = Arc::clone(&rx_abort_txs);
 
             async move {
-                let socket_arc = Arc::new(Mutex::new(src_socket));
+                let socket_arc = Arc::new(src_socket);
                 sockets.insert(port, Arc::clone(&socket_arc));
 
                 let (abort_tx, abort_rx) = tokio::sync::oneshot::channel();
@@ -210,7 +213,7 @@ impl ConnectionManager {
             let sink_socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
             self.sockets.entry(sink).or_insert_with(|| {
                 info!("Egress socket for sink port {} opened", sink);
-                Arc::new(Mutex::new(sink_socket))
+                Arc::new(sink_socket)
             });
         }
         Ok(())

@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::broadcast;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
+use std::sync::Mutex;
 use tracing::{debug, trace};
 
 use crate::ProcessingJob;
@@ -15,7 +16,7 @@ struct ProcessorMetrics {
 }
 
 pub struct Processor {
-    proc_rx: Arc<Mutex<mpsc::Receiver<ProcessingJob>>>,
+    proc_rx: Mutex<Option<mpsc::Receiver<ProcessingJob>>>,
     sink_tx: mpsc::Sender<SinkTxJob>,
     event_tx: broadcast::Sender<DataPlaneEvent>
 }
@@ -23,18 +24,17 @@ pub struct Processor {
 impl Processor {
     pub fn new(proc_rx: mpsc::Receiver<ProcessingJob>, sink_tx: mpsc::Sender<SinkTxJob>, event_tx: broadcast::Sender<DataPlaneEvent>) -> Self {
         Self {
-            proc_rx: Arc::new(Mutex::new(proc_rx)),
+            proc_rx: Mutex::new(Some(proc_rx)),
             sink_tx,
             event_tx
         }
     }
 
     pub fn start(&self) {
-        let proc_rx = Arc::clone(&self.proc_rx);
+        let mut proc_rx = self.proc_rx.lock().unwrap().take().expect("Processor started more than once");
         let sink_tx = self.sink_tx.clone();
 
         tokio::spawn(async move {
-            let mut proc_rx = proc_rx.lock().await;
             let mut metrics = ProcessorMetrics::new();
             
             while let Some(job) = proc_rx.recv().await {
